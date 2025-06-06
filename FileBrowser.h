@@ -22,4 +22,8 @@ private:
     QString rootPath;
     QString currentPath;
     void refreshView(const QString &path);
+
+    // 防误触相关成员
+    QModelIndex lastClickedIndex;
+    qint64 lastClickTime;
 };
