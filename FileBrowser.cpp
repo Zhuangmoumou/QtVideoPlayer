@@ -3,9 +3,12 @@
 #include <QMouseEvent>
 #include <QStyle>
 #include <QScroller>
+#include <QElapsedTimer>
+#include <QDateTime>
 
 FileBrowser::FileBrowser(const QString &rootPath, QWidget *parent)
     : QWidget(parent), rootPath(rootPath), currentPath(rootPath)
+    , lastClickedIndex(QModelIndex()), lastClickTime(0)
 {
     setWindowTitle("选择媒体文件");
     setLayout(new QVBoxLayout);
@@ -108,7 +111,17 @@ FileBrowser::FileBrowser(const QString &rootPath, QWidget *parent)
     // 初始化显示
     refreshView(currentPath);
 
+    // 触摸友好：连续点击同一项才响应
     connect(tree, &QTreeView::clicked, this, [&](const QModelIndex &idx){
+        qint64 now = QDateTime::currentMSecsSinceEpoch();
+        bool sameIndex = (idx == lastClickedIndex);
+        bool fast = (now - lastClickTime < 800); // 800ms内第二次点击
+        lastClickedIndex = idx;
+        lastClickTime = now;
+        if (!(sameIndex && fast)) {
+            // 第一次点击，仅高亮，不操作
+            return;
+        }
         if (proxyModel->itemFromIndex(idx)->data(Qt::UserRole+1).toBool()) {
             // 返回上级目录
             if (currentPath != rootPath) {
@@ -127,6 +140,9 @@ FileBrowser::FileBrowser(const QString &rootPath, QWidget *parent)
             emit fileSelected(info.absoluteFilePath());
         }
     });
+
+    // 移除双击事件
+    // connect(tree, &QTreeView::doubleClicked, ...);
 }
 
 void FileBrowser::refreshView(const QString &path)
