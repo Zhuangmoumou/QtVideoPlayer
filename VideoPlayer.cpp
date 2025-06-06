@@ -76,6 +76,14 @@ void VideoPlayer::play(const QString &path)
     loadCoverAndLyrics(path);
     currentLyricIndex = 0; // 播放新文件时重置歌词下标
 
+    // 新增：加载同名 srt 字幕
+    subtitles.clear();
+    currentSubtitleIndex = -1;
+    QString srtPath = QFileInfo(path).absolutePath() + "/" + QFileInfo(path).completeBaseName() + ".srt";
+    if (QFile::exists(srtPath)) {
+        loadSrtSubtitle(srtPath);
+    }
+
     // 读取视频/音频信息
     videoInfoLabel.clear();
     AVFormatContext *fmt_ctx = nullptr;
@@ -278,6 +286,35 @@ void VideoPlayer::loadCoverAndLyrics(const QString &path)
     }
 }
 
+void VideoPlayer::loadSrtSubtitle(const QString &path)
+{
+    subtitles.clear();
+    QFile f(path);
+    if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) return;
+    QTextStream in(&f);
+    QString line;
+    QRegExp timeRx(R"((\d+):(\d+):(\d+),(\d+)\s*-->\s*(\d+):(\d+):(\d+),(\d+))");
+    while (!in.atEnd()) {
+        // 跳过序号行
+        line = in.readLine();
+        if (line.trimmed().isEmpty()) continue;
+        // 时间行
+        QString timeLine = line;
+        if (!timeRx.exactMatch(timeLine)) continue;
+        qint64 start = timeRx.cap(1).toInt()*3600000 + timeRx.cap(2).toInt()*60000 + timeRx.cap(3).toInt()*1000 + timeRx.cap(4).toInt();
+        qint64 end   = timeRx.cap(5).toInt()*3600000 + timeRx.cap(6).toInt()*60000 + timeRx.cap(7).toInt()*1000 + timeRx.cap(8).toInt();
+        // 字幕内容
+        QString text;
+        while (!in.atEnd()) {
+            QString t = in.readLine();
+            if (t.trimmed().isEmpty()) break;
+            if (!text.isEmpty()) text += "\n";
+            text += t;
+        }
+        subtitles.append({start, end, text});
+    }
+}
+
 void VideoPlayer::onFrame(const QImage &frame)
 {
     currentFrame = frame.copy();
@@ -304,7 +341,21 @@ void VideoPlayer::onPositionChanged(qint64 pts)
         lyricOpacity = 0.0;
         overlayTimer->start();
     }
-    update(); // 确保进度条和歌词刷新
+
+    // SRT 字幕同步
+    int subIdx = -1;
+    for (int i = 0; i < subtitles.size(); ++i) {
+        if (pts >= subtitles[i].startTime && pts <= subtitles[i].endTime) {
+            subIdx = i;
+            break;
+        }
+    }
+    if (currentSubtitleIndex != subIdx) {
+        currentSubtitleIndex = subIdx;
+        update();
+    }
+
+    update(); // 确保进度条和歌词/字幕刷新
 }
 
 void VideoPlayer::mousePressEvent(QMouseEvent *e)
@@ -437,6 +488,95 @@ void VideoPlayer::paintEvent(QPaintEvent *)
 
     // 歌词
     QRect lyricRect = rect().adjusted(0, height()-70, 0, -10);
+    // SRT 字幕绘制（优先于歌词，样式同歌词）
+    {
+        // 渐变动画（出现和消失）
+        static int lastSubIdx = -2;
+        static QElapsedTimer subFadeTimer;
+        static bool fadingOut = false;
+        static qreal fadeOpacity = 1.0;
+        static QString lastSubText;
+        qreal opacity = 1.0;
+        QString subText;
+
+        if (currentSubtitleIndex >= 0 && currentSubtitleIndex < subtitles.size()) {
+            subText = subtitles[currentSubtitleIndex].text;
+            if (lastSubIdx != currentSubtitleIndex) {
+                // 字幕切换，启动淡入
+                subFadeTimer.restart();
+                fadingOut = false;
+                lastSubIdx = currentSubtitleIndex;
+                fadeOpacity = 1.0;
+                lastSubText = subText;
+            }
+        } else {
+            // 字幕消失，启动淡出
+            if (!fadingOut && lastSubIdx != -1) {
+                subFadeTimer.restart();
+                fadingOut = true;
+                fadeOpacity = 1.0;
+            }
+            subText = lastSubText;
+        }
+
+        if (!subText.isEmpty()) {
+            if (!fadingOut) {
+                // 淡入
+                if (subFadeTimer.isValid()) {
+                    qint64 elapsed = subFadeTimer.elapsed();
+                    if (elapsed < 400) {
+                        opacity = qMin(1.0, elapsed / 400.0);
+                        QTimer::singleShot(16, this, [this]{ update(); });
+                    } else {
+                        opacity = 1.0;
+                    }
+                }
+                fadeOpacity = opacity;
+            } else {
+                // 淡出
+                if (subFadeTimer.isValid()) {
+                    qint64 elapsed = subFadeTimer.elapsed();
+                    if (elapsed < 400) {
+                        opacity = fadeOpacity * (1.0 - elapsed / 400.0);
+                        QTimer::singleShot(16, this, [this]{ update(); });
+                    } else {
+                        opacity = 0.0;
+                        fadingOut = false;
+                        lastSubIdx = -1;
+                        lastSubText.clear();
+                    }
+                }
+            }
+
+            if (opacity > 0.01) {
+                QFont subFont("Microsoft YaHei", 12, QFont::Bold);
+                p.setFont(subFont);
+
+                QRect textRect = p.fontMetrics().boundingRect(lyricRect, Qt::AlignHCenter | Qt::AlignVCenter, subText);
+                textRect = textRect.marginsAdded(QMargins(18, 8, 18, 8));
+                textRect.moveCenter(lyricRect.center());
+
+                // 半透明黑色背景
+                p.save();
+                p.setRenderHint(QPainter::Antialiasing, true);
+                QColor bgColor(0, 0, 0, int(180 * opacity));
+                p.setPen(Qt::NoPen);
+                p.setBrush(bgColor);
+                p.drawRoundedRect(textRect, 12, 12);
+                p.restore();
+
+                // 白色文字
+                p.save();
+                QColor textColor(255, 255, 255, int(255 * opacity));
+                p.setPen(textColor);
+                p.drawText(textRect, Qt::AlignHCenter | Qt::AlignVCenter, subText);
+                p.restore();
+            }
+            // SRT 绘制后直接 return，避免歌词和字幕重叠
+            if (opacity > 0.01) return;
+        }
+    }
+
     // 歌词渐变动画
     qreal opacity = lyricOpacity;
     if (lyricFadeTimer.isValid()) {

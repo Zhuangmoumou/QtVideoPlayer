@@ -62,6 +62,16 @@ private:
   int lastLyricIndex = -1;
   QElapsedTimer lyricFadeTimer;
 
+  // SRT 字幕支持
+  struct SubtitleLine {
+    qint64 startTime;
+    qint64 endTime;
+    QString text;
+  };
+  QList<SubtitleLine> subtitles;
+  int currentSubtitleIndex = -1;
+  void loadSrtSubtitle(const QString &path);
+
   QImage currentFrame;
   QString videoInfoLabel;
 
