@@ -14,7 +14,7 @@ HEADERS += FileBrowser.h \
 
 QMAKE_CXXFLAGS += -Wno-deprecated-declarations
 
-INCLUDEPATH += /home/lyrecoul/ffmpeg-3.4.8/include/ /home/lyrecoul/TagLib/usr/local/include/ /home/lyrecoul/PenDevelopment/NewPlayer/include/
+INCLUDEPATH += /home/lyrecoul/ffmpeg-3.4.8/include/ /home/lyrecoul/TagLib/usr/local/include/
 LIBS += -L/home/lyrecoul/PenDevelopment/lib \
         -lavformat -lavcodec -lavutil -lswscale -lswresample \
         -lavdevice -lz -lasound -lavfilter \
