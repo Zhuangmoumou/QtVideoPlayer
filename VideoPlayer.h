@@ -1,9 +1,9 @@
 #pragma once
 #include <QAudioOutput>
+#include <QElapsedTimer>
 #include <QMap>
 #include <QTimer>
 #include <QWidget>
-#include <QElapsedTimer>
 
 #include "FFMpegDecoder.h"
 
