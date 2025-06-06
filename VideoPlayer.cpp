@@ -4,7 +4,6 @@
 #include <QFile>
 #include <QDir>
 #include <QMediaMetaData>
-#include <iostream>
 #include <taglib/fileref.h>
 #include <taglib/tag.h>
 #include <taglib/id3v2tag.h>
@@ -41,12 +40,31 @@ VideoPlayer::VideoPlayer(QWidget *parent)
     overlayTimer = new QTimer(this);
     overlayTimer->setInterval(200);
     connect(overlayTimer, &QTimer::timeout, this, &VideoPlayer::updateOverlay);
+
+    // 新增：进度条和媒体信息显示定时器
+    overlayBarTimer = new QTimer(this);
+    overlayBarTimer->setSingleShot(true);
+    connect(overlayBarTimer, &QTimer::timeout, this, [this]() {
+        showOverlayBar = false;
+        update();
+    });
+    showOverlayBar = false;
+
+    // 文件名滚动
+    scrollTimer = new QTimer(this);
+    scrollTimer->setInterval(40); // 25fps
+    connect(scrollTimer, &QTimer::timeout, this, [this]() {
+        scrollOffset += 2;
+        update();
+    });
+    scrollOffset = 0;
 }
 
 VideoPlayer::~VideoPlayer()
 {
     decoder->stop();
     audioOutput->stop();
+    scrollTimer->stop();
 }
 
 void VideoPlayer::play(const QString &path)
@@ -81,16 +99,26 @@ void VideoPlayer::play(const QString &path)
                 int sec = fmt_ctx->duration / AV_TIME_BASE;
                 int min = sec / 60;
                 sec = sec % 60;
-                videoInfoLabel += QString("时长: %1:%2")
+                videoInfoLabel += QString("时长: %1:%2  ")
                     .arg(min, 2, 10, QChar('0'))
                     .arg(sec, 2, 10, QChar('0'));
             }
         }
         avformat_close_input(&fmt_ctx);
     }
+    // 新增：保存文件名
+    currentFileName = QFileInfo(path).fileName();
+
+    // 重置滚动
+    scrollOffset = 0;
+    scrollTimer->stop();
 
     decoder->start(path);
     show();
+    showOverlayBarForSeconds(5); // 播放时显示 overlay
+
+    // 启动滚动定时器
+    scrollTimer->start();
 }
 
 void VideoPlayer::loadCoverAndLyrics(const QString &path)
@@ -176,7 +204,7 @@ void VideoPlayer::onPositionChanged(qint64 pts)
         lyricOpacity = 0.0;
         overlayTimer->start();
     }
-    update(); // 新增：确保进度条和歌词刷新
+    update(); // 确保进度条和歌词刷新
 }
 
 void VideoPlayer::mousePressEvent(QMouseEvent *e)
@@ -192,9 +220,10 @@ void VideoPlayer::mouseReleaseEvent(QMouseEvent *)
     if (isSeeking) {
         isSeeking = false;
         decoder->seek(currentPts);
+        showOverlayBarForSeconds(5); // 拖动进度条后显示 overlay
     } else {
-        // 单击：暂停/播放
         decoder->togglePause();
+        showOverlayBarForSeconds(5); // 暂停/播放切换时显示 overlay
     }
 }
 
@@ -250,19 +279,62 @@ void VideoPlayer::paintEvent(QPaintEvent *)
         p.drawPixmap(x, y, coverW, coverH, coverArt);
     }
 
-    // 左上角视频信息标签
-    if (!videoInfoLabel.isEmpty()) {
-        QFont infoFont("Microsoft YaHei", 10, QFont::Bold); // 修改为微软雅黑
-        p.setFont(infoFont);
+    // 只在 showOverlayBar 为 true 时绘制媒体信息和进度条
+    if (showOverlayBar) {
+        // 左上角视频信息标签
+        if (!videoInfoLabel.isEmpty() || !currentFileName.isEmpty()) {
+            QFont infoFont("Microsoft YaHei", 10, QFont::Bold); // 修改为微软雅黑
+            p.setFont(infoFont);
+            p.setPen(Qt::white);
+            QRect infoRect = QRect(10, 10, width()/1.5, 24);
+            p.setBrush(QColor(0,0,0,128));
+            p.setRenderHint(QPainter::Antialiasing, true);
+            p.drawRoundedRect(infoRect.adjusted(-4,-2,4,2), 6, 6);
+
+            // 拼接文件名和媒体信息
+            QString infoText = currentFileName;
+            if (!videoInfoLabel.isEmpty()) {
+                infoText += "  |  " + videoInfoLabel;
+            }
+
+            // 滚动显示
+            QFontMetrics fm(infoFont);
+            int textWidth = fm.horizontalAdvance(infoText);
+            int rectWidth = infoRect.width() - 10;
+            int x = infoRect.left() + 5;
+            int y = infoRect.top();
+            int availableWidth = rectWidth;
+
+            if (textWidth > availableWidth) {
+                int offset = scrollOffset % (textWidth + 40);
+                int drawX = x - offset;
+                p.setClipRect(infoRect.adjusted(2,2,-2,-2));
+                p.drawText(drawX, y + infoRect.height() - 8, infoText);
+                // 循环补尾
+                if (textWidth - offset < availableWidth) {
+                    p.drawText(drawX + textWidth + 40, y + infoRect.height() - 8, infoText);
+                }
+                p.setClipping(false);
+            } else {
+                p.drawText(infoRect, Qt::AlignLeft | Qt::AlignVCenter, infoText);
+            }
+        }
+
+        // 进度条
+        double pct = duration > 0 ? double(currentPts) / duration : 0;
+        int barMargin = 20;
+        int barWidth = width() - barMargin * 2;
+        int barHeight = 10;
+        int barY = height() - 30;
+        QRect bar(barMargin, barY, barWidth, barHeight);
+
         p.setPen(Qt::white);
-        QRect infoRect = QRect(10, 10, width()/1.5, 24);
-        p.setBrush(QColor(0,0,0,128));
-        p.setRenderHint(QPainter::Antialiasing, true);
-        p.drawRoundedRect(infoRect.adjusted(-4,-2,4,2), 6, 6);
-        p.drawText(infoRect, Qt::AlignLeft | Qt::AlignVCenter, videoInfoLabel);
+        p.setBrush(Qt::NoBrush);
+        p.drawRect(bar);
+
+        p.fillRect(QRect(bar.left() + 1, bar.top() + 1, int((bar.width() - 2) * pct), bar.height() - 2), Qt::white);
     }
 
-    // 直接绘制叠加层（歌词、进度条）
     // 歌词
     QRect lyricRect = rect().adjusted(0, height()-70, 0, -10);
     // 歌词渐变动画
@@ -295,20 +367,6 @@ void VideoPlayer::paintEvent(QPaintEvent *)
         p.drawText(lyricRect, Qt::AlignHCenter | Qt::AlignVCenter, lyrics[lastLyricIndex].text);
         p.restore();
     }
-
-    // 进度条
-    double pct = duration > 0 ? double(currentPts) / duration : 0;
-    int barMargin = 20;
-    int barWidth = width() - barMargin * 2;
-    int barHeight = 10;
-    int barY = height() - 30;
-    QRect bar(barMargin, barY, barWidth, barHeight);
-
-    p.setPen(Qt::white);
-    p.setBrush(Qt::NoBrush);
-    p.drawRect(bar);
-
-    p.fillRect(QRect(bar.left() + 1, bar.top() + 1, int((bar.width() - 2) * pct), bar.height() - 2), Qt::white);
 }
 
 void VideoPlayer::updateOverlay()
@@ -326,5 +384,11 @@ void VideoPlayer::updateOverlay()
             update();
         }
     }
-    // ...existing code...
+}
+
+void VideoPlayer::showOverlayBarForSeconds(int seconds)
+{
+    showOverlayBar = true;
+    overlayBarTimer->start(seconds * 1000);
+    update();
 }
