@@ -1,5 +1,6 @@
 #include "FFMpegDecoder.h"
 #include <QtDebug>
+#include <chrono>
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -76,9 +77,23 @@ void FFMpegDecoder::decodeLoop() {
   SwsContext *sws_ctx = nullptr;
   int vwidth = 0, vheight = 0;
   AVRational vtime_base{0, 1};
+  int sws_src_pix_fmt = -1; // 新增，记录当前sws输入格式
   if (vid_idx >= 0) {
-    AVCodec *vcodec =
-        avcodec_find_decoder(fmt_ctx->streams[vid_idx]->codecpar->codec_id);
+    // 强制使用软件解码器，排除 rkmpp
+    AVCodec *vcodec = nullptr;
+    AVCodec *iter = av_codec_next(nullptr);
+    while (iter) {
+      if (iter->id == fmt_ctx->streams[vid_idx]->codecpar->codec_id &&
+          iter->decode != nullptr && iter->type == AVMEDIA_TYPE_VIDEO) {
+        if (QString(iter->name).contains("rk", Qt::CaseInsensitive)) {
+          iter = av_codec_next(iter);
+          continue; // 跳过 rkmpp
+        }
+        vcodec = iter;
+        break;
+      }
+      iter = av_codec_next(iter);
+    }
     if (!vcodec) {
       qWarning() << "Video decoder not found";
       avformat_close_input(&fmt_ctx);
@@ -90,7 +105,8 @@ void FFMpegDecoder::decodeLoop() {
       avformat_close_input(&fmt_ctx);
       return;
     }
-    if (avcodec_parameters_to_context(vctx, fmt_ctx->streams[vid_idx]->codecpar) < 0) {
+    if (avcodec_parameters_to_context(
+            vctx, fmt_ctx->streams[vid_idx]->codecpar) < 0) {
       qWarning() << "Could not copy video codec parameters";
       avcodec_free_context(&vctx);
       avformat_close_input(&fmt_ctx);
@@ -105,78 +121,76 @@ void FFMpegDecoder::decodeLoop() {
     vwidth = vctx->width;
     vheight = vctx->height;
     vtime_base = fmt_ctx->streams[vid_idx]->time_base;
-    // sws 用于转为 RGB24，明确设置色彩空间和范围
-    int srcRange = 0; // mpeg标准范围
-    int dstRange = 0;
-    int brightness = 0, contrast = 1, saturation = 1;
-    const int *inv_table = sws_getCoefficients(SWS_CS_ITU601);
-    sws_ctx = sws_getCachedContext(
-        nullptr,
-        vwidth, vheight, vctx->pix_fmt,
-        vwidth, vheight, AV_PIX_FMT_RGB24,
-        SWS_BILINEAR | SWS_ACCURATE_RND,
-        nullptr, nullptr, nullptr
-    );
-    if (sws_ctx) {
-        sws_setColorspaceDetails(
-            sws_ctx,
-            inv_table, srcRange,
-            sws_getCoefficients(SWS_CS_ITU601), dstRange,
-            brightness, contrast, saturation
-        );
-    } else {
-        qWarning() << "Could not initialize sws context";
-    }
+    // sws_ctx 初始化延后到收到第一帧
   }
   // 音频解码器
   AVCodecContext *actx = nullptr;
   SwrContext *swr_ctx = nullptr;
   AVRational atime_base{0, 1};
   if (aid_idx >= 0) {
-    AVCodec *acodec =
-        avcodec_find_decoder(fmt_ctx->streams[aid_idx]->codecpar->codec_id);
+    // 强制使用软件解码器，排除 rkmpp
+    AVCodec *acodec = nullptr;
+    AVCodec *iter = av_codec_next(nullptr);
+    while (iter) {
+      if (iter->id == fmt_ctx->streams[aid_idx]->codecpar->codec_id &&
+          iter->decode != nullptr && iter->type == AVMEDIA_TYPE_AUDIO) {
+        if (QString(iter->name).contains("rk", Qt::CaseInsensitive)) {
+          iter = av_codec_next(iter);
+          continue;
+        }
+        acodec = iter;
+        break;
+      }
+      iter = av_codec_next(iter);
+    }
     if (!acodec) {
       qWarning() << "Audio decoder not found";
-      if (vctx) avcodec_free_context(&vctx);
+      if (vctx)
+        avcodec_free_context(&vctx);
       avformat_close_input(&fmt_ctx);
       return;
     }
     actx = avcodec_alloc_context3(acodec);
     if (!actx) {
       qWarning() << "Could not allocate audio codec context";
-      if (vctx) avcodec_free_context(&vctx);
+      if (vctx)
+        avcodec_free_context(&vctx);
       avformat_close_input(&fmt_ctx);
       return;
     }
-    if (avcodec_parameters_to_context(actx, fmt_ctx->streams[aid_idx]->codecpar) < 0) {
+    if (avcodec_parameters_to_context(
+            actx, fmt_ctx->streams[aid_idx]->codecpar) < 0) {
       qWarning() << "Could not copy audio codec parameters";
-      if (vctx) avcodec_free_context(&vctx);
+      if (vctx)
+        avcodec_free_context(&vctx);
       avcodec_free_context(&actx);
       avformat_close_input(&fmt_ctx);
       return;
     }
     if (avcodec_open2(actx, acodec, nullptr) < 0) {
       qWarning() << "Could not open audio codec";
-      if (vctx) avcodec_free_context(&vctx);
+      if (vctx)
+        avcodec_free_context(&vctx);
       avcodec_free_context(&actx);
       avformat_close_input(&fmt_ctx);
       return;
     }
     atime_base = fmt_ctx->streams[aid_idx]->time_base;
     // swr 用于重采样到 S16/44100/2
-    swr_ctx = swr_alloc();
+    if (actx->channel_layout == 0)
+      actx->channel_layout = av_get_default_channel_layout(actx->channels);
+    swr_ctx = swr_alloc_set_opts(
+        nullptr,
+        av_get_default_channel_layout(OUT_CHANNELS), // 输出声道布局
+        OUT_SAMPLE_FMT,                              // 输出采样格式
+        OUT_SAMPLE_RATE,                             // 输出采样率
+        actx->channel_layout,                        // 输入声道布局
+        actx->sample_fmt,                            // 输入采样格式
+        actx->sample_rate,                           // 输入采样率
+        0, nullptr);
     if (!swr_ctx) {
       qWarning() << "Could not allocate swr context";
     } else {
-      av_opt_set_channel_layout(swr_ctx, "in_channel_layout",
-                                actx->channel_layout, 0);
-      av_opt_set_int(swr_ctx, "in_sample_rate", actx->sample_rate, 0);
-      av_opt_set_sample_fmt(swr_ctx, "in_sample_fmt", actx->sample_fmt, 0);
-      // 输出
-      av_opt_set_channel_layout(swr_ctx, "out_channel_layout",
-                                actx->channel_layout, 0);
-      av_opt_set_int(swr_ctx, "out_sample_rate", OUT_SAMPLE_RATE, 0);
-      av_opt_set_sample_fmt(swr_ctx, "out_sample_fmt", OUT_SAMPLE_FMT, 0);
       if (swr_init(swr_ctx) < 0) {
         qWarning() << "Could not initialize swr context";
         swr_free(&swr_ctx);
@@ -201,6 +215,18 @@ void FFMpegDecoder::decodeLoop() {
     rgb_buf = (uint8_t *)av_malloc(numBytes);
   }
 
+  // 新增：用于视频同步的时间基准
+  using clock = std::chrono::steady_clock;
+  clock::time_point playback_start_time;
+  int64_t first_video_pts = AV_NOPTS_VALUE;
+  bool first_video_frame = true;
+
+  // 新增：用于音频同步的时间基准
+  clock::time_point audio_playback_start_time;
+  int64_t first_audio_pts = AV_NOPTS_VALUE;
+  bool first_audio_frame = true;
+  int64_t last_audio_ms = -1; // 新增：记录上一个音频帧的ms
+
   // 主循环
   while (!m_stop) {
     // pause
@@ -209,6 +235,18 @@ void FFMpegDecoder::decodeLoop() {
       m_cond.wait(lk, [&] { return m_stop || !m_pause; });
       if (m_stop)
         break;
+      // 恢复播放时重置同步基准
+      if (vid_idx >= 0) {
+        playback_start_time = clock::now();
+        first_video_pts = AV_NOPTS_VALUE;
+        first_video_frame = true;
+      }
+      if (aid_idx >= 0) {
+        audio_playback_start_time = clock::now();
+        first_audio_pts = AV_NOPTS_VALUE;
+        first_audio_frame = true;
+        last_audio_ms = -1;
+      }
     }
     // seek
     if (m_seeking) {
@@ -219,28 +257,89 @@ void FFMpegDecoder::decodeLoop() {
       if (actx)
         avcodec_flush_buffers(actx);
       m_seeking = false;
+      // seek 后重置同步基准
+      if (vid_idx >= 0) {
+        playback_start_time = clock::now();
+        first_video_pts = AV_NOPTS_VALUE;
+        first_video_frame = true;
+      }
+      if (aid_idx >= 0) {
+        audio_playback_start_time = clock::now();
+        first_audio_pts = AV_NOPTS_VALUE;
+        first_audio_frame = true;
+        last_audio_ms = -1;
+      }
     }
     if (av_read_frame(fmt_ctx, pkt) < 0)
       break;
 
     // 视频包
     if (pkt->stream_index == vid_idx) {
-      if (!vctx || !sws_ctx) {
+      if (!vctx) {
         av_packet_unref(pkt);
         continue;
       }
       avcodec_send_packet(vctx, pkt);
       while (avcodec_receive_frame(vctx, frame) == 0) {
+        // 新增：视频帧同步控制
+        int64_t pts = frame->best_effort_timestamp;
+        if (pts == AV_NOPTS_VALUE)
+          pts = frame->pts;
+        if (pts == AV_NOPTS_VALUE)
+          pts = 0;
+        int64_t ms = pts * vtime_base.num * 1000LL / vtime_base.den;
+
+        if (first_video_frame) {
+          playback_start_time = clock::now();
+          first_video_pts = ms;
+          first_video_frame = false;
+        } else {
+          int64_t elapsed =
+              std::chrono::duration_cast<std::chrono::milliseconds>(
+                  clock::now() - playback_start_time)
+                  .count();
+          int64_t wait_ms = (ms - first_video_pts) - elapsed;
+          if (wait_ms > 0 && wait_ms < 2000) { // 防止长时间阻塞
+            std::this_thread::sleep_for(std::chrono::milliseconds(wait_ms));
+          }
+        }
+
+        // 检查并初始化/重建 sws_ctx
+        if (!sws_ctx || sws_src_pix_fmt != frame->format) {
+          if (sws_ctx)
+            sws_freeContext(sws_ctx);
+          sws_ctx = sws_getCachedContext(
+              nullptr, vwidth, vheight, (AVPixelFormat)frame->format, vwidth,
+              vheight, AV_PIX_FMT_RGB24, SWS_BILINEAR | SWS_ACCURATE_RND,
+              nullptr, nullptr, nullptr);
+          sws_src_pix_fmt = frame->format;
+          if (!sws_ctx) {
+            qWarning() << "Could not initialize sws context for format"
+                       << frame->format;
+            continue;
+          }
+        }
+
         // 转为 RGB24
         uint8_t *dst[1] = {rgb_buf};
         int dst_linesize[1] = {rgb_stride};
-        sws_scale(sws_ctx, frame->data, frame->linesize, 0, vheight, dst, dst_linesize);
+        sws_scale(sws_ctx, frame->data, frame->linesize, 0, vheight, dst,
+                  dst_linesize);
+
         QImage img(rgb_buf, vwidth, vheight, rgb_stride, QImage::Format_RGB888);
-        emit frameReady(img.copy()); // 复制数据，避免线程安全问题
+
+        if (img.isNull()) {
+          qWarning()
+              << "QImage isNull after construction, fallback to copy buffer";
+          QByteArray tmp((const char *)rgb_buf, vheight * rgb_stride);
+          QImage img2((const uchar *)tmp.constData(), vwidth, vheight,
+                      QImage::Format_RGB888);
+          emit frameReady(img2.copy());
+        } else {
+          emit frameReady(img.copy());
+        }
 
         // 计算 pts 并发送
-        qint64 ms = frame->best_effort_timestamp * vtime_base.num * 1000LL /
-                    vtime_base.den;
         emit positionChanged(ms);
       }
     }
@@ -252,11 +351,64 @@ void FFMpegDecoder::decodeLoop() {
       }
       avcodec_send_packet(actx, pkt);
       while (avcodec_receive_frame(actx, frame) == 0) {
+        if (frame->nb_samples == 0) {
+          continue;
+        }
+        int64_t pts = frame->pts;
+        if (pts == AV_NOPTS_VALUE)
+          pts = frame->best_effort_timestamp;
+        if (pts == AV_NOPTS_VALUE)
+          pts = 0;
+        int64_t ms = pts * atime_base.num * 1000LL / atime_base.den;
+
+        // 跳过负时间戳的音频帧，避免首帧锯齿
+        if (ms < 0) {
+          continue;
+        }
+
+        // 修正：仅音频流时也能正确同步
+        if (vid_idx < 0) {
+          // 只有音频流时，独立音频同步
+          if (first_audio_frame) {
+            audio_playback_start_time = clock::now();
+            first_audio_pts = ms;
+            first_audio_frame = false;
+            last_audio_ms = ms;
+          } else {
+            int64_t elapsed =
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    clock::now() - audio_playback_start_time)
+                    .count();
+            int64_t diff = (ms - first_audio_pts) - elapsed;
+            if (diff > 0 && diff < 200) { // 只sleep最多200ms
+              std::this_thread::sleep_for(std::chrono::milliseconds(diff));
+            }
+            last_audio_ms = ms;
+          }
+        } else {
+          // 有视频流时，音频同步策略不变
+          if (first_audio_frame) {
+            audio_playback_start_time = clock::now();
+            first_audio_pts = ms;
+            first_audio_frame = false;
+            last_audio_ms = ms;
+          } else {
+            int64_t elapsed =
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    clock::now() - audio_playback_start_time)
+                    .count();
+            int64_t diff = (ms - first_audio_pts) - elapsed;
+            if (diff > 0 && diff < 100) { // 只sleep最多100ms
+              std::this_thread::sleep_for(std::chrono::milliseconds(diff));
+            }
+            last_audio_ms = ms;
+          }
+        }
+
         // 重采样
         int out_nb = av_rescale_rnd(
             swr_get_delay(swr_ctx, actx->sample_rate) + frame->nb_samples,
             OUT_SAMPLE_RATE, actx->sample_rate, AV_ROUND_UP);
-        // 分配 buffer
         uint8_t **out_buf = nullptr;
         av_samples_alloc_array_and_samples(&out_buf, nullptr, OUT_CHANNELS,
                                            out_nb, OUT_SAMPLE_FMT, 0);
@@ -269,10 +421,6 @@ void FFMpegDecoder::decodeLoop() {
         QByteArray pcm((const char *)out_buf[0], data_size);
         emit audioReady(pcm);
 
-        // 计算 pts 并发送
-        qint64 ms = frame->pts != AV_NOPTS_VALUE
-                        ? frame->pts * atime_base.num * 1000LL / atime_base.den
-                        : 0;
         emit positionChanged(ms);
 
         av_freep(&out_buf[0]);
