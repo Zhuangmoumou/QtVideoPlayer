@@ -2,6 +2,7 @@
 #include <QStandardItemModel>
 #include <QMouseEvent>
 #include <QStyle>
+#include <QScroller>
 
 FileBrowser::FileBrowser(const QString &rootPath, QWidget *parent)
     : QWidget(parent), rootPath(rootPath), currentPath(rootPath)
@@ -27,6 +28,13 @@ FileBrowser::FileBrowser(const QString &rootPath, QWidget *parent)
     tree->setIconSize(QSize(24, 24)); // 设置图标大小
     tree->setFont(font); // 设置tree控件字体为微软雅黑
     layout()->addWidget(tree);
+
+    // 启用手指平滑滚动
+    tree->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
+    tree->setHorizontalScrollMode(QAbstractItemView::ScrollPerPixel);
+#if QT_VERSION >= QT_VERSION_CHECK(5, 10, 0)
+    QScroller::grabGesture(tree->viewport(), QScroller::TouchGesture);
+#endif
 
     // 设置暗黑配色
     QPalette darkPalette;
