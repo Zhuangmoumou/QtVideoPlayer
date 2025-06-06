@@ -449,22 +449,55 @@ void VideoPlayer::paintEvent(QPaintEvent *)
     }
     // 当前歌词
     if (currentLyricIndex < lyrics.size()) {
-        QFont lyricFont("Microsoft YaHei", 12, QFont::Bold); // 修改为微软雅黑
+        QFont lyricFont("Microsoft YaHei", 12, QFont::Bold); // 字号更大
         p.setFont(lyricFont);
-        p.setPen(Qt::NoPen);
-        p.setBrush(Qt::NoBrush);
+
+        // Youtube 风格：黑色半透明背景，白色文字
+        QString lyricText = lyrics[currentLyricIndex].text;
+        QRect textRect = p.fontMetrics().boundingRect(lyricRect, Qt::AlignHCenter | Qt::AlignVCenter, lyricText);
+        textRect = textRect.marginsAdded(QMargins(18, 8, 18, 8));
+        textRect.moveCenter(lyricRect.center());
+
+        // 半透明黑色背景
         p.save();
-        p.setPen(QColor(255, 255, 0, int(255 * opacity)));
-        p.drawText(lyricRect, Qt::AlignHCenter | Qt::AlignVCenter, lyrics[currentLyricIndex].text);
+        p.setRenderHint(QPainter::Antialiasing, true);
+        QColor bgColor(0, 0, 0, int(180 * opacity));
+        p.setPen(Qt::NoPen);
+        p.setBrush(bgColor);
+        p.drawRoundedRect(textRect, 12, 12);
+        p.restore();
+
+        // 白色文字
+        p.save();
+        QColor textColor(255, 255, 255, int(255 * opacity));
+        p.setPen(textColor);
+        p.drawText(textRect, Qt::AlignHCenter | Qt::AlignVCenter, lyricText);
         p.restore();
     }
     // 上一行歌词淡出（可选）
     if (lastLyricIndex >= 0 && lastLyricIndex < lyrics.size() && lyricOpacity < 1.0) {
-        QFont lyricFont("Microsoft YaHei", 12, QFont::Bold); // 修改为微软雅黑
+        QFont lyricFont("Microsoft YaHei", 12, QFont::Bold);
         p.setFont(lyricFont);
+
+        QString lyricText = lyrics[lastLyricIndex].text;
+        QRect textRect = p.fontMetrics().boundingRect(lyricRect, Qt::AlignHCenter | Qt::AlignVCenter, lyricText);
+        textRect = textRect.marginsAdded(QMargins(18, 8, 18, 8));
+        textRect.moveCenter(lyricRect.center());
+
+        // 半透明黑色背景
         p.save();
-        p.setPen(QColor(255, 255, 0, int(255 * (1.0 - opacity) * 0.7)));
-        p.drawText(lyricRect, Qt::AlignHCenter | Qt::AlignVCenter, lyrics[lastLyricIndex].text);
+        p.setRenderHint(QPainter::Antialiasing, true);
+        QColor bgColor(0, 0, 0, int(180 * (1.0 - opacity) * 0.7));
+        p.setPen(Qt::NoPen);
+        p.setBrush(bgColor);
+        p.drawRoundedRect(textRect, 12, 12);
+        p.restore();
+
+        // 白色文字
+        p.save();
+        QColor textColor(255, 255, 255, int(255 * (1.0 - opacity) * 0.7));
+        p.setPen(textColor);
+        p.drawText(textRect, Qt::AlignHCenter | Qt::AlignVCenter, lyricText);
         p.restore();
     }
 }
