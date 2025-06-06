@@ -397,7 +397,7 @@ void VideoPlayer::mouseReleaseEvent(QMouseEvent *) {
     showOverlayBarForSeconds(5); // 拖动进度条后显示 overlay
   } else {
     decoder->togglePause();
-    showOverlayBarForSeconds(5); // 暂停/播放切换时显示 overlay
+    showOverlayBarForSeconds(300); // 暂停/播放切换时显示 overlay
   }
 }
 
