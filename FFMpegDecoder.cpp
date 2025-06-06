@@ -380,7 +380,8 @@ void FFMpegDecoder::decodeLoop() {
                     clock::now() - audio_playback_start_time)
                     .count();
             int64_t diff = (ms - first_audio_pts) - elapsed;
-            if (diff > 0 && diff < 200) { // 只sleep最多200ms
+            // 优化：只在 0 < diff < 30ms 时 sleep，避免长时间阻塞
+            if (diff > 0 && diff < 30) {
               std::this_thread::sleep_for(std::chrono::milliseconds(diff));
             }
             last_audio_ms = ms;
@@ -398,7 +399,8 @@ void FFMpegDecoder::decodeLoop() {
                     clock::now() - audio_playback_start_time)
                     .count();
             int64_t diff = (ms - first_audio_pts) - elapsed;
-            if (diff > 0 && diff < 100) { // 只sleep最多100ms
+            // 优化：只在 0 < diff < 30ms 时 sleep，避免长时间阻塞
+            if (diff > 0 && diff < 30) {
               std::this_thread::sleep_for(std::chrono::milliseconds(diff));
             }
             last_audio_ms = ms;
