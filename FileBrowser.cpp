@@ -15,7 +15,7 @@ FileBrowser::FileBrowser(const QString &rootPath, QWidget *parent)
 
     model = new QFileSystemModel(this);
     model->setRootPath(rootPath);
-    model->setNameFilters({"*.mp4","*.avi","*.mkv","*.mp3","*.wav"});
+    model->setNameFilters({"*.mp4","*.avi","*.mkv","*.mp3","*.wav","*.flac","*.ogg","*.aac"});
     model->setNameFilterDisables(false);
 
     proxyModel = new QStandardItemModel(this);
