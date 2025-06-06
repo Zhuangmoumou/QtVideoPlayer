@@ -1,7 +1,6 @@
 #pragma once
 #include <QAudioOutput>
 #include <QMap>
-#include <QOpenGLWidget>
 #include <QTimer>
 #include <QWidget>
 #include <QElapsedTimer>
@@ -32,7 +31,6 @@ private slots:
   void updateOverlay();
 
 private:
-  QOpenGLWidget *videoWidget;
   QAudioOutput *audioOutput;
   QIODevice *audioIO;
   FFMpegDecoder *decoder;
@@ -59,6 +57,10 @@ private:
   };
   QList<LyricLine> lyrics;
   int currentLyricIndex = 0;
+  // 歌词动画
+  qreal lyricOpacity = 1.0;
+  int lastLyricIndex = -1;
+  QElapsedTimer lyricFadeTimer;
 
   QImage currentFrame;
   QString videoInfoLabel;

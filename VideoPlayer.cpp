@@ -10,15 +10,13 @@
 #include <taglib/id3v2tag.h>
 #include <taglib/attachedpictureframe.h>
 #include <QTextStream>
+#include <QDebug>
 
 VideoPlayer::VideoPlayer(QWidget *parent)
     : QWidget(parent)
 {
     setAttribute(Qt::WA_AcceptTouchEvents);
     setWindowFlags(Qt::FramelessWindowHint);
-    // 视频渲染区
-    videoWidget = new QOpenGLWidget(this);
-    videoWidget->setAutoFillBackground(false);
 
     // AudioOutput
     QAudioFormat format;
@@ -54,6 +52,7 @@ VideoPlayer::~VideoPlayer()
 void VideoPlayer::play(const QString &path)
 {
     loadCoverAndLyrics(path);
+    currentLyricIndex = 0; // 播放新文件时重置歌词下标
 
     // 读取视频/音频信息
     videoInfoLabel.clear();
@@ -109,28 +108,50 @@ void VideoPlayer::loadCoverAndLyrics(const QString &path)
         }
     }
     // 加载同名 .lrc
-    QString lrc = QFileInfo(path).completeBaseName() + ".lrc";
+    QString lrc = QFileInfo(path).absolutePath() + "/" + QFileInfo(path).completeBaseName() + ".lrc";
     if (QFile::exists(lrc)) {
-        std::cout << "加载歌词：" << lrc.toStdString() << std::endl;
         QFile f(lrc);
         if (f.open(QIODevice::ReadOnly | QIODevice::Text)) {
             lyrics.clear();
             QTextStream in(&f);
+            QMap<qint64, QString> lyricMap; // 用于合并同一时间戳的多行歌词
             while (!in.atEnd()) {
                 QString line = in.readLine();
-                QRegExp rx("\\[(\\d+):(\\d+\\.\\d+)\\](.*)");
-                if (rx.indexIn(line) == 0) {
+                QRegExp rx("\\[(\\d+):(\\d+\\.\\d+)\\]");
+                int pos = 0;
+                QList<qint64> times;
+                // 提取所有时间戳
+                while ((pos = rx.indexIn(line, pos)) != -1) {
                     qint64 t = rx.cap(1).toInt()*60000 + int(rx.cap(2).toDouble()*1000);
-                    lyrics.append({t, rx.cap(3)});
+                    times.append(t);
+                    pos += rx.matchedLength();
+                }
+                // 去掉所有时间戳，剩下歌词文本
+                QString text = line;
+                text.remove(QRegExp("(\\[\\d+:\\d+\\.\\d+\\])+"));
+                text = text.trimmed();
+                if (!times.isEmpty() && !text.isEmpty()) {
+                    for (qint64 t : times) {
+                        if (lyricMap.contains(t)) {
+                            lyricMap[t] += "\n" + text;
+                        } else {
+                            lyricMap[t] = text;
+                        }
+                    }
                 }
             }
+            // 排序并写入lyrics
+            lyrics.clear();
+            for (auto it = lyricMap.constBegin(); it != lyricMap.constEnd(); ++it) {
+                lyrics.append({it.key(), it.value()});
+            }
+            std::sort(lyrics.begin(), lyrics.end(), [](const LyricLine &a, const LyricLine &b){ return a.time < b.time; });
         }
     }
 }
 
 void VideoPlayer::onFrame(const QImage &frame)
 {
-    // 缓存当前帧并请求重绘
     currentFrame = frame.copy();
     update();
 }
@@ -143,11 +164,19 @@ void VideoPlayer::onAudioData(const QByteArray &data)
 void VideoPlayer::onPositionChanged(qint64 pts)
 {
     currentPts = pts;
-    // 更新歌词下标
-    while (currentLyricIndex+1 < lyrics.size()
-           && lyrics[currentLyricIndex+1].time <= pts) {
-        currentLyricIndex++;
+    // 修正歌词下标同步，支持快退
+    int idx = 0;
+    while (idx+1 < lyrics.size() && lyrics[idx+1].time <= pts) {
+        idx++;
     }
+    if (currentLyricIndex != idx) {
+        lastLyricIndex = currentLyricIndex;
+        currentLyricIndex = idx;
+        lyricFadeTimer.restart();
+        lyricOpacity = 0.0;
+        overlayTimer->start();
+    }
+    update(); // 新增：确保进度条和歌词刷新
 }
 
 void VideoPlayer::mousePressEvent(QMouseEvent *e)
@@ -160,7 +189,6 @@ void VideoPlayer::mousePressEvent(QMouseEvent *e)
 void VideoPlayer::mouseReleaseEvent(QMouseEvent *)
 {
     pressed = false;
-    qint64 dt = pressTimer.elapsed();
     if (isSeeking) {
         isSeeking = false;
         decoder->seek(currentPts);
@@ -195,15 +223,24 @@ void VideoPlayer::seekByDelta(int dx)
 
 void VideoPlayer::resizeEvent(QResizeEvent *)
 {
-    videoWidget->setGeometry(rect());
+    // 移除 videoWidget 相关代码
 }
 
 void VideoPlayer::paintEvent(QPaintEvent *)
 {
     QPainter p(this);
+    // 填充黑色背景，防止残影
+    p.fillRect(rect(), Qt::black);
+
     // 如果有视频帧则绘制视频帧，否则绘制封面
     if (!currentFrame.isNull()) {
-        p.drawImage(rect(), currentFrame);
+        // 保持比例居中显示
+        QSize imgSize = currentFrame.size();
+        QSize widgetSize = size();
+        imgSize.scale(widgetSize, Qt::KeepAspectRatio);
+        QRect targetRect(QPoint(0,0), imgSize);
+        targetRect.moveCenter(rect().center());
+        p.drawImage(targetRect, currentFrame);
     } else if (!coverArt.isNull()) {
         // 居中绘制封面
         int coverW = qMin(width()/2, 240);
@@ -215,34 +252,48 @@ void VideoPlayer::paintEvent(QPaintEvent *)
 
     // 左上角视频信息标签
     if (!videoInfoLabel.isEmpty()) {
-        QFont infoFont("Sans", 10, QFont::Bold);
+        QFont infoFont("Microsoft YaHei", 10, QFont::Bold); // 修改为微软雅黑
         p.setFont(infoFont);
         p.setPen(Qt::white);
-        QRect infoRect = QRect(10, 10, width()/2, 24);
+        QRect infoRect = QRect(10, 10, width()/1.5, 24);
         p.setBrush(QColor(0,0,0,128));
         p.setRenderHint(QPainter::Antialiasing, true);
         p.drawRoundedRect(infoRect.adjusted(-4,-2,4,2), 6, 6);
         p.drawText(infoRect, Qt::AlignLeft | Qt::AlignVCenter, videoInfoLabel);
     }
 
-    // 绘制叠加层
-    updateOverlay();
-}
-
-void VideoPlayer::updateOverlay()
-{
-    QPainter p(this);
-    p.setRenderHint(QPainter::Antialiasing, true);
-    p.setPen(Qt::white);
-    p.setFont(QFont("Sans", 12));
-
+    // 直接绘制叠加层（歌词、进度条）
     // 歌词
     QRect lyricRect = rect().adjusted(0, height()-70, 0, -10);
+    // 歌词渐变动画
+    qreal opacity = lyricOpacity;
+    if (lyricFadeTimer.isValid()) {
+        qint64 elapsed = lyricFadeTimer.elapsed();
+        if (elapsed < 400) {
+            opacity = qMin(1.0, elapsed / 400.0);
+        } else {
+            opacity = 1.0;
+        }
+    }
+    // 当前歌词
     if (currentLyricIndex < lyrics.size()) {
-        QFont lyricFont("Sans", 16, QFont::Bold);
+        QFont lyricFont("Microsoft YaHei", 12, QFont::Bold); // 修改为微软雅黑
         p.setFont(lyricFont);
-        p.setPen(Qt::yellow);
+        p.setPen(Qt::NoPen);
+        p.setBrush(Qt::NoBrush);
+        p.save();
+        p.setPen(QColor(255, 255, 0, int(255 * opacity)));
         p.drawText(lyricRect, Qt::AlignHCenter | Qt::AlignVCenter, lyrics[currentLyricIndex].text);
+        p.restore();
+    }
+    // 上一行歌词淡出（可选）
+    if (lastLyricIndex >= 0 && lastLyricIndex < lyrics.size() && lyricOpacity < 1.0) {
+        QFont lyricFont("Microsoft YaHei", 12, QFont::Bold); // 修改为微软雅黑
+        p.setFont(lyricFont);
+        p.save();
+        p.setPen(QColor(255, 255, 0, int(255 * (1.0 - opacity) * 0.7)));
+        p.drawText(lyricRect, Qt::AlignHCenter | Qt::AlignVCenter, lyrics[lastLyricIndex].text);
+        p.restore();
     }
 
     // 进度条
@@ -257,8 +308,23 @@ void VideoPlayer::updateOverlay()
     p.setBrush(Qt::NoBrush);
     p.drawRect(bar);
 
-    QRect fillBar = bar.adjusted(1, 1, int((bar.width() - 2) * pct) - bar.width() + 2, -1);
     p.fillRect(QRect(bar.left() + 1, bar.top() + 1, int((bar.width() - 2) * pct), bar.height() - 2), Qt::white);
+}
 
-    p.end();
+void VideoPlayer::updateOverlay()
+{
+    // 歌词渐变动画刷新
+    if (lyricFadeTimer.isValid()) {
+        qint64 elapsed = lyricFadeTimer.elapsed();
+        if (elapsed < 400) {
+            lyricOpacity = qMin(1.0, elapsed / 400.0);
+            update();
+        } else {
+            lyricOpacity = 1.0;
+            lastLyricIndex = -1;
+            overlayTimer->stop();
+            update();
+        }
+    }
+    // ...existing code...
 }
