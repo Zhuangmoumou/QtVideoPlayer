@@ -9,6 +9,10 @@ FileBrowser::FileBrowser(const QString &rootPath, QWidget *parent)
     setWindowTitle("选择媒体文件");
     setLayout(new QVBoxLayout);
 
+    // 设置全局字体为微软雅黑
+    QFont font("Microsoft YaHei", 10);
+    this->setFont(font);
+
     model = new QFileSystemModel(this);
     model->setRootPath(rootPath);
     model->setNameFilters({"*.mp4","*.avi","*.mkv","*.mp3","*.wav"});
@@ -21,6 +25,7 @@ FileBrowser::FileBrowser(const QString &rootPath, QWidget *parent)
     tree->setEditTriggers(QAbstractItemView::NoEditTriggers);
     tree->setHeaderHidden(true);
     tree->setIconSize(QSize(24, 24)); // 设置图标大小
+    tree->setFont(font); // 设置tree控件字体为微软雅黑
     layout()->addWidget(tree);
 
     // 设置暗黑配色
@@ -46,14 +51,14 @@ FileBrowser::FileBrowser(const QString &rootPath, QWidget *parent)
         "QTreeView { background-color: #282828; color: #f0f0f0; selection-background-color: transparent; }"
         "QTreeView::item:selected {"
         "   background: #3a6ea5;"
-        "   border-radius: 10px;"
-        "   margin: 4px;"
+        "   border-radius: 8px;"         // 缩小圆角
+        "   margin: 1px;"                // 缩小外边距
         "   color: #fff;"
         "}"
         "QTreeView::item {"
-        "   margin: 4px;"
-        "   padding: 8px 4px;"
-        "   border-radius: 10px;"
+        "   margin: 1px;"                // 缩小外边距
+        "   padding: 2px 4px;"           // 缩小内边距
+        "   border-radius: 8px;"         // 缩小圆角
         "}"
         "QScrollBar:vertical {"
         "   background: #222;"
