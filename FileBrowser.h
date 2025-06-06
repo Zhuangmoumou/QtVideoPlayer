@@ -3,6 +3,9 @@
 #include <QFileSystemModel>
 #include <QTreeView>
 #include <QVBoxLayout>
+#include <QStandardItemModel>
+#include <QDir>
+#include <QFileInfo>
 
 class FileBrowser : public QWidget {
     Q_OBJECT
@@ -15,4 +18,8 @@ signals:
 private:
     QFileSystemModel *model;
     QTreeView *tree;
+    QStandardItemModel *proxyModel;
+    QString rootPath;
+    QString currentPath;
+    void refreshView(const QString &path);
 };
