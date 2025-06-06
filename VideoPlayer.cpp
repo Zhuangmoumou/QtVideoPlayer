@@ -1,4 +1,5 @@
 #include "VideoPlayer.h"
+#include "qdebug.h"
 #include <QMouseEvent>
 #include <QPainter>
 #include <QFile>
@@ -8,6 +9,9 @@
 #include <taglib/tag.h>
 #include <taglib/id3v2tag.h>
 #include <taglib/attachedpictureframe.h>
+#include <taglib/unsynchronizedlyricsframe.h>
+#include <taglib/flacfile.h>
+#include <taglib/xiphcomment.h>
 #include <QTextStream>
 #include <QDebug>
 
@@ -123,57 +127,153 @@ void VideoPlayer::play(const QString &path)
 
 void VideoPlayer::loadCoverAndLyrics(const QString &path)
 {
-    // 使用 TagLib 读取封面
-    TagLib::FileRef f(path.toUtf8().constData());
-    if (!f.isNull() && f.tag()) {
-        auto *id3 = dynamic_cast<TagLib::ID3v2::Tag*>(f.file()->tag());
-        if (id3) {
-            auto frames = id3->frameListMap()["APIC"];
-            if (!frames.isEmpty()) {
-                auto pic = static_cast<TagLib::ID3v2::AttachedPictureFrame*>(frames.front());
-                coverArt.loadFromData((const uchar*)pic->picture().data(), pic->picture().size());
-            }
-        }
-    }
-    // 加载同名 .lrc
-    QString lrc = QFileInfo(path).absolutePath() + "/" + QFileInfo(path).completeBaseName() + ".lrc";
-    if (QFile::exists(lrc)) {
-        QFile f(lrc);
-        if (f.open(QIODevice::ReadOnly | QIODevice::Text)) {
-            lyrics.clear();
-            QTextStream in(&f);
-            QMap<qint64, QString> lyricMap; // 用于合并同一时间戳的多行歌词
-            while (!in.atEnd()) {
-                QString line = in.readLine();
-                QRegExp rx("\\[(\\d+):(\\d+\\.\\d+)\\]");
-                int pos = 0;
-                QList<qint64> times;
-                // 提取所有时间戳
-                while ((pos = rx.indexIn(line, pos)) != -1) {
-                    qint64 t = rx.cap(1).toInt()*60000 + int(rx.cap(2).toDouble()*1000);
-                    times.append(t);
-                    pos += rx.matchedLength();
+    lyrics.clear();
+    coverArt = QPixmap();
+    bool embeddedLyricLoaded = false;
+    QString suffix = QFileInfo(path).suffix().toLower();
+
+    if (suffix == "mp3") {
+        // MP3: TagLib 读取封面和内嵌歌词
+        TagLib::FileRef f(path.toUtf8().constData());
+        if (!f.isNull() && f.tag()) {
+            auto *id3 = dynamic_cast<TagLib::ID3v2::Tag*>(f.file()->tag());
+            if (id3) {
+                // 读取封面
+                auto frames = id3->frameListMap()["APIC"];
+                if (!frames.isEmpty()) {
+                    auto pic = static_cast<TagLib::ID3v2::AttachedPictureFrame*>(frames.front());
+                    coverArt.loadFromData((const uchar*)pic->picture().data(), pic->picture().size());
                 }
-                // 去掉所有时间戳，剩下歌词文本
-                QString text = line;
-                text.remove(QRegExp("(\\[\\d+:\\d+\\.\\d+\\])+"));
-                text = text.trimmed();
-                if (!times.isEmpty() && !text.isEmpty()) {
-                    for (qint64 t : times) {
-                        if (lyricMap.contains(t)) {
-                            lyricMap[t] += "\n" + text;
-                        } else {
-                            lyricMap[t] = text;
+                // 读取内嵌歌词（USLT 帧）
+                auto usltFrames = id3->frameListMap()["USLT"];
+                if (!usltFrames.isEmpty()) {
+                    for (auto *frame : usltFrames) {
+                        auto *uslt = dynamic_cast<TagLib::ID3v2::UnsynchronizedLyricsFrame*>(frame);
+                        if (uslt) {
+                            QString lyricText = QString::fromStdWString(uslt->text().toWString());
+                            QRegExp rx("\\[(\\d+):(\\d+\\.\\d+)\\]");
+                            QStringList lines = lyricText.split('\n');
+                            QMap<qint64, QString> lyricMap;
+                            for (const QString &line : lines) {
+                                int pos = 0;
+                                QList<qint64> times;
+                                while ((pos = rx.indexIn(line, pos)) != -1) {
+                                    qint64 t = rx.cap(1).toInt()*60000 + int(rx.cap(2).toDouble()*1000);
+                                    times.append(t);
+                                    pos += rx.matchedLength();
+                                }
+                                QString text = line;
+                                text.remove(QRegExp("(\\[\\d+:\\d+\\.\\d+\\])+"));
+                                text = text.trimmed();
+                                if (!times.isEmpty() && !text.isEmpty()) {
+                                    for (qint64 t : times) {
+                                        if (lyricMap.contains(t)) {
+                                            lyricMap[t] += "\n" + text;
+                                        } else {
+                                            lyricMap[t] = text;
+                                        }
+                                    }
+                                }
+                            }
+                            if (lyricMap.isEmpty() && !lyricText.trimmed().isEmpty()) {
+                                lyrics.append({0, lyricText.trimmed()});
+                            } else {
+                                for (auto it = lyricMap.constBegin(); it != lyricMap.constEnd(); ++it) {
+                                    lyrics.append({it.key(), it.value()});
+                                }
+                                std::sort(lyrics.begin(), lyrics.end(), [](const LyricLine &a, const LyricLine &b){ return a.time < b.time; });
+                            }
+                            embeddedLyricLoaded = !lyrics.isEmpty();
+                            if (embeddedLyricLoaded) break;
                         }
                     }
                 }
             }
-            // 排序并写入lyrics
-            lyrics.clear();
-            for (auto it = lyricMap.constBegin(); it != lyricMap.constEnd(); ++it) {
-                lyrics.append({it.key(), it.value()});
+        }
+    } else if (suffix == "flac") {
+        // FLAC: TagLib 读取 Vorbis Comment 的 LYRICS 字段
+        TagLib::FileRef f(path.toUtf8().constData());
+        if (!f.isNull() && f.file()) {
+            auto *flacFile = dynamic_cast<TagLib::FLAC::File*>(f.file());
+            if (flacFile && flacFile->xiphComment()) {
+                auto *comment = flacFile->xiphComment();
+                if (comment->contains("LYRICS")) {
+                    // 修正：先 toString，再转 QString
+                    QString lyricText = QString::fromUtf8(comment->fieldListMap()["LYRICS"].toString().toCString(true));
+                    QRegExp rx("\\[(\\d+):(\\d+\\.\\d+)\\]");
+                    QStringList lines = lyricText.split('\n');
+                    QMap<qint64, QString> lyricMap;
+                    for (const QString &line : lines) {
+                        int pos = 0;
+                        QList<qint64> times;
+                        while ((pos = rx.indexIn(line, pos)) != -1) {
+                            qint64 t = rx.cap(1).toInt()*60000 + int(rx.cap(2).toDouble()*1000);
+                            times.append(t);
+                            pos += rx.matchedLength();
+                        }
+                        QString text = line;
+                        text.remove(QRegExp("(\\[\\d+:\\d+\\.\\d+\\])+"));
+                        text = text.trimmed();
+                        if (!times.isEmpty() && !text.isEmpty()) {
+                            for (qint64 t : times) {
+                                if (lyricMap.contains(t)) {
+                                    lyricMap[t] += "\n" + text;
+                                } else {
+                                    lyricMap[t] = text;
+                                }
+                            }
+                        }
+                    }
+                    if (lyricMap.isEmpty() && !lyricText.trimmed().isEmpty()) {
+                        lyrics.append({0, lyricText.trimmed()});
+                    } else {
+                        for (auto it = lyricMap.constBegin(); it != lyricMap.constEnd(); ++it) {
+                            lyrics.append({it.key(), it.value()});
+                        }
+                        std::sort(lyrics.begin(), lyrics.end(), [](const LyricLine &a, const LyricLine &b){ return a.time < b.time; });
+                    }
+                    embeddedLyricLoaded = !lyrics.isEmpty();
+                }
+                // 读取封面（FLAC 封面可选实现，略）
             }
-            std::sort(lyrics.begin(), lyrics.end(), [](const LyricLine &a, const LyricLine &b){ return a.time < b.time; });
+        }
+    }
+    // 其他类型或未读取到内嵌歌词，尝试读取同名 .lrc
+    if (!embeddedLyricLoaded) {
+        QString lrc = QFileInfo(path).absolutePath() + "/" + QFileInfo(path).completeBaseName() + ".lrc";
+        if (QFile::exists(lrc)) {
+            QFile f(lrc);
+            if (f.open(QIODevice::ReadOnly | QIODevice::Text)) {
+                QTextStream in(&f);
+                QMap<qint64, QString> lyricMap;
+                while (!in.atEnd()) {
+                    QString line = in.readLine();
+                    QRegExp rx("\\[(\\d+):(\\d+\\.\\d+)\\]");
+                    int pos = 0;
+                    QList<qint64> times;
+                    while ((pos = rx.indexIn(line, pos)) != -1) {
+                        qint64 t = rx.cap(1).toInt()*60000 + int(rx.cap(2).toDouble()*1000);
+                        times.append(t);
+                        pos += rx.matchedLength();
+                    }
+                    QString text = line;
+                    text.remove(QRegExp("(\\[\\d+:\\d+\\.\\d+\\])+"));
+                    text = text.trimmed();
+                    if (!times.isEmpty() && !text.isEmpty()) {
+                        for (qint64 t : times) {
+                            if (lyricMap.contains(t)) {
+                                lyricMap[t] += "\n" + text;
+                            } else {
+                                lyricMap[t] = text;
+                            }
+                        }
+                    }
+                }
+                for (auto it = lyricMap.constBegin(); it != lyricMap.constEnd(); ++it) {
+                    lyrics.append({it.key(), it.value()});
+                }
+                std::sort(lyrics.begin(), lyrics.end(), [](const LyricLine &a, const LyricLine &b){ return a.time < b.time; });
+            }
         }
     }
 }
