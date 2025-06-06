@@ -65,6 +65,16 @@ private:
   QImage currentFrame;
   QString videoInfoLabel;
 
+  // 进度条和媒体信息显示控制
+  bool showOverlayBar = false;
+  QTimer *overlayBarTimer = nullptr;
+  void showOverlayBarForSeconds(int seconds);
+
+  // 文件名滚动
+  QString currentFileName;
+  int scrollOffset = 0;
+  QTimer *scrollTimer = nullptr;
+
   void loadCoverAndLyrics(const QString &path);
   void seekByDelta(int dx);
   void showOverlay(bool visible);
