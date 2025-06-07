@@ -422,6 +422,9 @@ void VideoPlayer::mouseDoubleClickEvent(QMouseEvent *) { close(); }
 void VideoPlayer::mouseMoveEvent(QMouseEvent *e) {
   if (!pressed)
     return;
+  // 仅在暂停状态下允许滑动 seek
+  if (!decoder->isPaused())
+    return;
   int dx = e->pos().x() - pressPos.x();
   if (qAbs(dx) > 20) {
     isSeeking = true;
@@ -430,6 +433,9 @@ void VideoPlayer::mouseMoveEvent(QMouseEvent *e) {
 }
 
 void VideoPlayer::seekByDelta(int dx) {
+  // 仅在暂停状态下允许 seek
+  if (!decoder->isPaused())
+    return;
   // 每滑动 100px，快进/后退 5 秒
   qint64 delta = dx * 50; // ms per px
   qint64 target = qBound<qint64>(0, currentPts + delta, duration);
