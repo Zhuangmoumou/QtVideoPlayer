@@ -611,7 +611,7 @@ void VideoPlayer::paintEvent(QPaintEvent *) {
 
         QRect textRect = p.fontMetrics().boundingRect(
             lyricRect, Qt::AlignHCenter | Qt::AlignVCenter, subText);
-        textRect = textRect.marginsAdded(QMargins(18, 8, 18, 8));
+        textRect = textRect.marginsAdded(QMargins(10, 8, 10, 8));
         textRect.moveCenter(lyricRect.center());
 
         // 半透明黑色背景
@@ -655,7 +655,7 @@ void VideoPlayer::paintEvent(QPaintEvent *) {
     QString lyricText = lyrics[currentLyricIndex].text;
     QRect textRect = p.fontMetrics().boundingRect(
         lyricRect, Qt::AlignHCenter | Qt::AlignVCenter, lyricText);
-    textRect = textRect.marginsAdded(QMargins(18, 8, 18, 8));
+    textRect = textRect.marginsAdded(QMargins(10, 8, 10, 8));
     textRect.moveCenter(lyricRect.center());
 
     // 半透明黑色背景
@@ -683,7 +683,7 @@ void VideoPlayer::paintEvent(QPaintEvent *) {
     QString lyricText = lyrics[lastLyricIndex].text;
     QRect textRect = p.fontMetrics().boundingRect(
         lyricRect, Qt::AlignHCenter | Qt::AlignVCenter, lyricText);
-    textRect = textRect.marginsAdded(QMargins(18, 8, 18, 8));
+    textRect = textRect.marginsAdded(QMargins(10, 8, 10, 8));
     textRect.moveCenter(lyricRect.center());
 
     // 半透明黑色背景
