@@ -6,6 +6,7 @@
 #include <QMediaMetaData>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QPainterPath>
 #include <QTextStream>
 #include <taglib/attachedpictureframe.h>
 #include <taglib/fileref.h>
@@ -534,13 +535,36 @@ void VideoPlayer::paintEvent(QPaintEvent *) {
     int barY = height() - 30;
     QRect bar(barMargin, barY, barWidth, barHeight);
 
-    p.setPen(Qt::white);
-    p.setBrush(Qt::NoBrush);
-    p.drawRect(bar);
+    // 圆角矩形进度条
+    int radius = barHeight / 2;
+    p.setRenderHint(QPainter::Antialiasing, true);
 
-    p.fillRect(QRect(bar.left() + 1, bar.top() + 1,
-                     int((bar.width() - 2) * pct), bar.height() - 2),
-               Qt::white);
+    // 背景
+    p.setPen(Qt::NoPen);
+    p.setBrush(QColor(255, 255, 255, 60));
+    p.drawRoundedRect(bar, radius, radius);
+
+    // 已播放部分
+    int playedWidth = int(bar.width() * pct);
+    if (playedWidth > 0) {
+      QRect playedRect = QRect(bar.left(), bar.top(), playedWidth, bar.height());
+      p.setBrush(Qt::white);
+      p.drawRoundedRect(playedRect, radius, radius);
+      // 修正：如果已播放部分比半径宽度小，避免圆角溢出
+      if (playedWidth < bar.height()) {
+        // 只画左侧半圆
+        QPainterPath path;
+        path.moveTo(bar.left(), bar.top() + bar.height() / 2);
+        path.arcTo(bar.left(), bar.top(), bar.height(), bar.height(), 90, 180);
+        path.closeSubpath();
+        p.fillPath(path, Qt::white);
+      }
+    }
+
+    // 边框
+    p.setPen(QPen(Qt::white, 1));
+    p.setBrush(Qt::NoBrush);
+    p.drawRoundedRect(bar, radius, radius);
   }
 
   // 歌词
