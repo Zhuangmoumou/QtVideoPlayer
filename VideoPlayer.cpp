@@ -58,8 +58,18 @@ VideoPlayer::VideoPlayer(QWidget *parent) : QWidget(parent) {
   // 文件名滚动
   scrollTimer = new QTimer(this);
   scrollTimer->setInterval(40); // 25fps
+  scrollPause = false;
+  scrollPauseTimer = new QTimer(this);
+  scrollPauseTimer->setSingleShot(true);
   connect(scrollTimer, &QTimer::timeout, this, [this]() {
+    if (scrollPause) return;
     scrollOffset += 2;
+    // 需要 infoText 宽度，延后到 paintEvent 处理
+    update();
+  });
+  connect(scrollPauseTimer, &QTimer::timeout, this, [this]() {
+    scrollPause = false;
+    scrollOffset = 0;
     update();
   });
   scrollOffset = 0;
@@ -487,7 +497,6 @@ void VideoPlayer::paintEvent(QPaintEvent *) {
         infoText += "  |  " + videoInfoLabel;
       }
 
-      // 滚动显示
       QFontMetrics fm(infoFont);
       int textWidth = fm.horizontalAdvance(infoText);
       int rectWidth = infoRect.width() - 10;
@@ -496,16 +505,22 @@ void VideoPlayer::paintEvent(QPaintEvent *) {
       int availableWidth = rectWidth;
 
       if (textWidth > availableWidth) {
-        int offset = scrollOffset % (textWidth + 40);
+        int totalScroll = textWidth + 40;
+        int offset = scrollOffset % totalScroll;
         int drawX = x - offset;
         p.setClipRect(infoRect.adjusted(2, 2, -2, -2));
         p.drawText(drawX, y + infoRect.height() - 8, infoText);
         // 循环补尾
         if (textWidth - offset < availableWidth) {
-          p.drawText(drawX + textWidth + 40, y + infoRect.height() - 8,
-                     infoText);
+          p.drawText(drawX + totalScroll, y + infoRect.height() - 8, infoText);
         }
         p.setClipping(false);
+
+        // 滚动到末尾时停顿 3 秒
+        if (!scrollPause && offset + 2 >= totalScroll - 2) {
+          scrollPause = true;
+          scrollPauseTimer->start(3000);
+        }
       } else {
         p.drawText(infoRect, Qt::AlignLeft | Qt::AlignVCenter, infoText);
       }

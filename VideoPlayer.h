@@ -84,6 +84,9 @@ private:
   QString currentFileName;
   int scrollOffset = 0;
   QTimer *scrollTimer = nullptr;
+  // 滚动停顿
+  bool scrollPause = false;
+  QTimer *scrollPauseTimer = nullptr;
 
   // 统一 overlay 字号
   int overlayFontSize = 9;
