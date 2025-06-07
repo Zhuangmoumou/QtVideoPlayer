@@ -473,10 +473,10 @@ void VideoPlayer::paintEvent(QPaintEvent *) {
   if (showOverlayBar) {
     // 左上角视频信息标签
     if (!videoInfoLabel.isEmpty() || !currentFileName.isEmpty()) {
-      QFont infoFont("Microsoft YaHei", 10, QFont::Bold); // 修改为微软雅黑
+      QFont infoFont("Microsoft YaHei", overlayFontSize - 2, QFont::Bold); // 使用统一字号
       p.setFont(infoFont);
       p.setPen(Qt::white);
-      QRect infoRect = QRect(10, 10, width() / 1.5, 24);
+      QRect infoRect = QRect(10, 10, width() / 3, 20);
       p.setBrush(QColor(0, 0, 0, 128));
       p.setRenderHint(QPainter::Antialiasing, true);
       p.drawRoundedRect(infoRect.adjusted(-4, -2, 4, 2), 6, 6);
@@ -591,7 +591,7 @@ void VideoPlayer::paintEvent(QPaintEvent *) {
       }
 
       if (opacity > 0.01) {
-        QFont subFont("Microsoft YaHei", 12, QFont::Bold);
+        QFont subFont("Microsoft YaHei", overlayFontSize, QFont::Bold); // 使用统一字号
         p.setFont(subFont);
 
         QRect textRect = p.fontMetrics().boundingRect(
@@ -633,7 +633,7 @@ void VideoPlayer::paintEvent(QPaintEvent *) {
   }
   // 当前歌词
   if (currentLyricIndex < lyrics.size()) {
-    QFont lyricFont("Microsoft YaHei", 12, QFont::Bold); // 字号更大
+    QFont lyricFont("Microsoft YaHei", overlayFontSize, QFont::Bold); // 使用统一字号
     p.setFont(lyricFont);
 
     // Youtube 风格：黑色半透明背景，白色文字
@@ -662,7 +662,7 @@ void VideoPlayer::paintEvent(QPaintEvent *) {
   // 上一行歌词淡出（可选）
   if (lastLyricIndex >= 0 && lastLyricIndex < lyrics.size() &&
       lyricOpacity < 1.0) {
-    QFont lyricFont("Microsoft YaHei", 12, QFont::Bold);
+    QFont lyricFont("Microsoft YaHei", overlayFontSize, QFont::Bold); // 使用统一字号
     p.setFont(lyricFont);
 
     QString lyricText = lyrics[lastLyricIndex].text;

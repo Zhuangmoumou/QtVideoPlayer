@@ -85,6 +85,9 @@ private:
   int scrollOffset = 0;
   QTimer *scrollTimer = nullptr;
 
+  // 统一 overlay 字号
+  int overlayFontSize = 9;
+
   void loadCoverAndLyrics(const QString &path);
   void seekByDelta(int dx);
   void showOverlay(bool visible);
