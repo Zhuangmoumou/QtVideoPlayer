@@ -53,14 +53,13 @@ void FFMpegDecoder::togglePause() {
     m_cond.notify_all();
 }
 
-bool FFMpegDecoder::isPaused() const {
-  return m_pause;
-}
+bool FFMpegDecoder::isPaused() const { return m_pause; }
 
 // 拆分后的视频解码循环
 void FFMpegDecoder::videoDecodeLoop() {
   AVFormatContext *fmt_ctx = nullptr;
-  if (avformat_open_input(&fmt_ctx, m_path.toUtf8().constData(), nullptr, nullptr) < 0) {
+  if (avformat_open_input(&fmt_ctx, m_path.toUtf8().constData(), nullptr,
+                          nullptr) < 0) {
     qWarning() << "Could not open input:" << m_path;
     return;
   }
@@ -106,7 +105,8 @@ void FFMpegDecoder::videoDecodeLoop() {
     avformat_close_input(&fmt_ctx);
     return;
   }
-  if (avcodec_parameters_to_context(vctx, fmt_ctx->streams[vid_idx]->codecpar) < 0) {
+  if (avcodec_parameters_to_context(vctx, fmt_ctx->streams[vid_idx]->codecpar) <
+      0) {
     qWarning() << "Could not copy video codec parameters";
     avcodec_free_context(&vctx);
     avformat_close_input(&fmt_ctx);
@@ -129,7 +129,8 @@ void FFMpegDecoder::videoDecodeLoop() {
   uint8_t *rgb_buf = nullptr;
   int rgb_buf_size = 0;
   if (vwidth && vheight) {
-    rgb_buf_size = av_image_get_buffer_size(AV_PIX_FMT_RGB24, vwidth, vheight, 1);
+    rgb_buf_size =
+        av_image_get_buffer_size(AV_PIX_FMT_RGB24, vwidth, vheight, 1);
     rgb_buf = (uint8_t *)av_malloc(rgb_buf_size);
   }
 
@@ -141,7 +142,8 @@ void FFMpegDecoder::videoDecodeLoop() {
   clock::time_point playback_start_time;
 
   // 计算总时长（只在视频线程发一次）
-  qint64 duration_ms = fmt_ctx->duration >= 0 ? fmt_ctx->duration / (AV_TIME_BASE / 1000) : 0;
+  qint64 duration_ms =
+      fmt_ctx->duration >= 0 ? fmt_ctx->duration / (AV_TIME_BASE / 1000) : 0;
   emit durationChanged(duration_ms);
 
   while (!m_stop) {
@@ -184,7 +186,8 @@ void FFMpegDecoder::videoDecodeLoop() {
           // 视频帧比音频快，分步短等待，提升高帧率流畅度
           int waited = 0;
           const int max_wait = 20; // 最多等待一帧时长（约16-20ms）
-          while (diff > 5 && waited < max_wait && !m_stop && !m_pause && !m_seeking) {
+          while (diff > 5 && waited < max_wait && !m_stop && !m_pause &&
+                 !m_seeking) {
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
             waited += 5;
             audioClock = m_audioClockMs.load();
@@ -208,8 +211,8 @@ void FFMpegDecoder::videoDecodeLoop() {
           sws_freeContext(sws_ctx);
         sws_ctx = sws_getCachedContext(
             nullptr, vwidth, vheight, (AVPixelFormat)frame->format, vwidth,
-            vheight, AV_PIX_FMT_RGB24, SWS_FAST_BILINEAR,
-            nullptr, nullptr, nullptr);
+            vheight, AV_PIX_FMT_RGB24, SWS_FAST_BILINEAR, nullptr, nullptr,
+            nullptr);
         sws_src_pix_fmt = frame->format;
         if (!sws_ctx) {
           qWarning() << "Could not initialize sws context for format"
@@ -223,7 +226,8 @@ void FFMpegDecoder::videoDecodeLoop() {
         vwidth = frame->width;
         vheight = frame->height;
         rgb_stride = vwidth * 3;
-        int new_buf_size = av_image_get_buffer_size(AV_PIX_FMT_RGB24, vwidth, vheight, 1);
+        int new_buf_size =
+            av_image_get_buffer_size(AV_PIX_FMT_RGB24, vwidth, vheight, 1);
         if (rgb_buf)
           av_free(rgb_buf);
         rgb_buf = (uint8_t *)av_malloc(new_buf_size);
@@ -233,14 +237,17 @@ void FFMpegDecoder::videoDecodeLoop() {
       // 转为 RGB24
       uint8_t *dst[1] = {rgb_buf};
       int dst_linesize[1] = {rgb_stride};
-      sws_scale(sws_ctx, frame->data, frame->linesize, 0, vheight, dst, dst_linesize);
+      sws_scale(sws_ctx, frame->data, frame->linesize, 0, vheight, dst,
+                dst_linesize);
 
       QImage img(rgb_buf, vwidth, vheight, rgb_stride, QImage::Format_RGB888);
 
       if (img.isNull()) {
-        qWarning() << "QImage isNull after construction, fallback to copy buffer";
+        qWarning()
+            << "QImage isNull after construction, fallback to copy buffer";
         QByteArray tmp((const char *)rgb_buf, vheight * rgb_stride);
-        QImage img2((const uchar *)tmp.constData(), vwidth, vheight, QImage::Format_RGB888);
+        QImage img2((const uchar *)tmp.constData(), vwidth, vheight,
+                    QImage::Format_RGB888);
         emit frameReady(img2.copy());
       } else {
         emit frameReady(img.copy());
@@ -265,7 +272,8 @@ void FFMpegDecoder::videoDecodeLoop() {
 // 拆分后的音频解码循环
 void FFMpegDecoder::audioDecodeLoop() {
   AVFormatContext *fmt_ctx = nullptr;
-  if (avformat_open_input(&fmt_ctx, m_path.toUtf8().constData(), nullptr, nullptr) < 0) {
+  if (avformat_open_input(&fmt_ctx, m_path.toUtf8().constData(), nullptr,
+                          nullptr) < 0) {
     qWarning() << "Could not open input:" << m_path;
     return;
   }
@@ -311,7 +319,8 @@ void FFMpegDecoder::audioDecodeLoop() {
     avformat_close_input(&fmt_ctx);
     return;
   }
-  if (avcodec_parameters_to_context(actx, fmt_ctx->streams[aid_idx]->codecpar) < 0) {
+  if (avcodec_parameters_to_context(actx, fmt_ctx->streams[aid_idx]->codecpar) <
+      0) {
     qWarning() << "Could not copy audio codec parameters";
     avcodec_free_context(&actx);
     avformat_close_input(&fmt_ctx);
@@ -327,15 +336,10 @@ void FFMpegDecoder::audioDecodeLoop() {
   SwrContext *swr_ctx = nullptr;
   if (actx->channel_layout == 0)
     actx->channel_layout = av_get_default_channel_layout(actx->channels);
-  swr_ctx = swr_alloc_set_opts(
-      nullptr,
-      av_get_default_channel_layout(OUT_CHANNELS),
-      OUT_SAMPLE_FMT,
-      OUT_SAMPLE_RATE,
-      actx->channel_layout,
-      actx->sample_fmt,
-      actx->sample_rate,
-      0, nullptr);
+  swr_ctx =
+      swr_alloc_set_opts(nullptr, av_get_default_channel_layout(OUT_CHANNELS),
+                         OUT_SAMPLE_FMT, OUT_SAMPLE_RATE, actx->channel_layout,
+                         actx->sample_fmt, actx->sample_rate, 0, nullptr);
   if (!swr_ctx) {
     qWarning() << "Could not allocate swr context";
   } else {
@@ -436,8 +440,8 @@ void FFMpegDecoder::audioDecodeLoop() {
           swr_convert(swr_ctx, out_buf, out_nb, (const uint8_t **)frame->data,
                       frame->nb_samples);
 
-      int data_size = av_samples_get_buffer_size(
-          nullptr, OUT_CHANNELS, converted, OUT_SAMPLE_FMT, 1);
+      int data_size = av_samples_get_buffer_size(nullptr, OUT_CHANNELS,
+                                                 converted, OUT_SAMPLE_FMT, 1);
       QByteArray pcm((const char *)out_buf[0], data_size);
       emit audioReady(pcm);
 
