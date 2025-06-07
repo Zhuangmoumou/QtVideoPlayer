@@ -182,23 +182,25 @@ void FFMpegDecoder::videoDecodeLoop() {
       qint64 audioClock = m_audioClockMs.load();
       qint64 diff = ms - audioClock;
       if (audioClock > 0) {
-        if (diff > 40) {
+        if (diff > 80) { // 放宽跳帧阈值
           // 视频帧比音频快，分步短等待，提升高帧率流畅度
           int waited = 0;
-          const int max_wait = 20; // 最多等待一帧时长（约16-20ms）
-          while (diff > 5 && waited < max_wait && !m_stop && !m_pause &&
+          const int max_wait = 40; // 增加最大等待时长
+          while (diff > 10 && waited < max_wait && !m_stop && !m_pause &&
                  !m_seeking) {
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
             waited += 5;
             audioClock = m_audioClockMs.load();
             diff = ms - audioClock;
           }
-          if (diff > 40) {
+          if (diff > 80) {
             // 仍然超前，跳过显示该帧
+            qWarning() << "Drop video frame: too far ahead of audio (diff =" << diff << "ms, video ms =" << ms << ", audio ms =" << audioClock << ")";
             continue;
           }
-        } else if (diff < -100) {
+        } else if (diff < -300) { // 放宽丢帧阈值
           // 视频帧比音频慢太多，丢弃该帧
+          qWarning() << "Drop video frame: too far behind audio (diff =" << diff << "ms, video ms =" << ms << ", audio ms =" << audioClock << ")";
           continue;
         }
         // 否则正常显示
