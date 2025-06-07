@@ -413,10 +413,7 @@ void VideoPlayer::mouseReleaseEvent(QMouseEvent *) {
     if (duration > 0 && currentPts >= 0 && currentPts <= duration) {
     decoder->seek(currentPts);
     }
-    // seeking 时一直显示 overlay，不自动隐藏
-    overlayBarTimer->stop();
-    showOverlayBar = true;
-    update();
+    showOverlayBarForSeconds(5);
   } else {
     decoder->togglePause();
     // 判断当前是否为暂停状态
@@ -437,22 +434,19 @@ void VideoPlayer::mouseDoubleClickEvent(QMouseEvent *) { close(); }
 void VideoPlayer::mouseMoveEvent(QMouseEvent *e) {
   if (!pressed)
     return;
-  // 仅在暂停状态下允许滑动 seek
-  if (!decoder->isPaused())
-    return;
   int dx = e->pos().x() - pressPos.x();
-  if (qAbs(dx) > 20) {
-    isSeeking = true;
-    seekByDelta(dx);
-  }
+  // 优化：实时响应滑动，无需大于20像素
+  isSeeking = true;
+  seekByDelta(dx);
+  // seeking 时一直显示 overlay，不自动隐藏
+  overlayBarTimer->stop();
+  showOverlayBar = true;
+  update(); // 实时刷新进度条
 }
 
 void VideoPlayer::seekByDelta(int dx) {
-  // 仅在暂停状态下允许 seek
-  if (!decoder->isPaused())
-    return;
-  // 每滑动 100px，快进/后退 5 秒
-  qint64 delta = dx * 50; // ms per px
+  // 优化：提升灵敏度，每像素 20ms
+  qint64 delta = dx * 20; // ms per px
   qint64 target = qBound<qint64>(0, currentPts + delta, duration);
   currentPts = target;
 }
