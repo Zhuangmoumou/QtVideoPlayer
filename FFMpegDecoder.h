@@ -41,6 +41,10 @@ private:
   std::mutex m_mutex;
   std::condition_variable m_cond;
 
+  // seek 同步标志
+  bool m_videoSeekHandled = false;
+  bool m_audioSeekHandled = false;
+
   // 音频时钟（ms）
   std::atomic<qint64> m_audioClockMs{0};
 

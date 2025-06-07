@@ -27,6 +27,8 @@ void FFMpegDecoder::start(const QString &path) {
   m_stop = false;
   m_pause = false;
   m_seeking = false;
+  m_videoSeekHandled = false; // 新增
+  m_audioSeekHandled = false; // 新增
 
   m_videoThread = std::thread(&FFMpegDecoder::videoDecodeLoop, this);
   m_audioThread = std::thread(&FFMpegDecoder::audioDecodeLoop, this);
@@ -44,6 +46,8 @@ void FFMpegDecoder::stop() {
 void FFMpegDecoder::seek(qint64 ms) {
   m_seekTarget = ms;
   m_seeking = true;
+  m_videoSeekHandled = false; // 新增
+  m_audioSeekHandled = false; // 新增
   m_cond.notify_all(); // 唤醒所有线程
 }
 
@@ -160,11 +164,17 @@ void FFMpegDecoder::videoDecodeLoop() {
       int64_t ts = m_seekTarget * (AV_TIME_BASE / 1000);
       av_seek_frame(fmt_ctx, -1, ts, AVSEEK_FLAG_BACKWARD);
       avcodec_flush_buffers(vctx);
-      m_seeking = false;
       playback_start_time = clock::now();
       // 丢弃所有未处理包
       av_packet_unref(pkt);
       av_frame_unref(frame);
+      {
+        std::lock_guard<std::mutex> lk(m_mutex);
+        m_videoSeekHandled = true;
+        if (m_audioSeekHandled) {
+          m_seeking = false;
+        }
+      }
       continue; // 立即进入下次循环，避免处理旧包
     }
     if (av_read_frame(fmt_ctx, pkt) < 0)
@@ -393,13 +403,19 @@ void FFMpegDecoder::audioDecodeLoop() {
       int64_t ts = m_seekTarget * (AV_TIME_BASE / 1000);
       av_seek_frame(fmt_ctx, -1, ts, AVSEEK_FLAG_BACKWARD);
       avcodec_flush_buffers(actx);
-      m_seeking = false;
       audio_playback_start_time = clock::now();
       first_audio_pts = AV_NOPTS_VALUE;
       first_audio_frame = true;
       // 丢弃所有未处理包
       av_packet_unref(pkt);
       av_frame_unref(frame);
+      {
+        std::lock_guard<std::mutex> lk(m_mutex);
+        m_audioSeekHandled = true;
+        if (m_videoSeekHandled) {
+          m_seeking = false;
+        }
+      }
       continue; // 立即进入下次循环，避免处理旧包
     }
     if (av_read_frame(fmt_ctx, pkt) < 0)
