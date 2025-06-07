@@ -207,7 +207,7 @@ void FFMpegDecoder::videoDecodeLoop() {
           sws_freeContext(sws_ctx);
         sws_ctx = sws_getCachedContext(
             nullptr, vwidth, vheight, (AVPixelFormat)frame->format, vwidth,
-            vheight, AV_PIX_FMT_RGB24, SWS_BILINEAR | SWS_ACCURATE_RND,
+            vheight, AV_PIX_FMT_RGB24, SWS_FAST_BILINEAR,
             nullptr, nullptr, nullptr);
         sws_src_pix_fmt = frame->format;
         if (!sws_ctx) {
