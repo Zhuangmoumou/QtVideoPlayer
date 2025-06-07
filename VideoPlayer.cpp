@@ -261,8 +261,7 @@ void VideoPlayer::loadCoverAndLyrics(const QString &path) {
           if (lyricMap.isEmpty() && !lyricText.trimmed().isEmpty()) {
             lyrics.append({0, lyricText.trimmed()});
           } else {
-            for (auto it = lyricMap.constBegin(); it != lyricMap.constEnd();
-                 ++it) {
+            for (auto it = lyricMap.constBegin(); it != lyricMap.constEnd(); ++it) {
               lyrics.append({it.key(), it.value()});
             }
             std::sort(lyrics.begin(), lyrics.end(),
@@ -403,13 +402,8 @@ void VideoPlayer::onPositionChanged(qint64 pts) {
 void VideoPlayer::mousePressEvent(QMouseEvent *e) {
   pressed = true;
   pressPos = e->pos();
-  pressTimer.start();
-  // 长按判定：800ms 后立即关闭窗口
-  QTimer::singleShot(800, this, [this]() {
-    if (pressed) {
-      close();
-    }
-  });
+  // pressTimer.start();
+  // 移除长按关闭窗口逻辑
 }
 
 void VideoPlayer::mouseReleaseEvent(QMouseEvent *e) {
@@ -436,9 +430,9 @@ void VideoPlayer::mouseReleaseEvent(QMouseEvent *e) {
   }
 }
 
-// 移除双击关闭窗口
+// 改为双击关闭窗口
 void VideoPlayer::mouseDoubleClickEvent(QMouseEvent *) {
-  // 不再处理关闭
+  close();
 }
 
 void VideoPlayer::mouseMoveEvent(QMouseEvent *e) {

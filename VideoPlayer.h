@@ -15,7 +15,7 @@ public:
   void play(const QString &path);
 
 protected:
-  // 手势/点击处理
+  // 手势/点击处理（双击关闭窗口）
   void mousePressEvent(QMouseEvent *e) override;
   void mouseReleaseEvent(QMouseEvent *e) override;
   void mouseDoubleClickEvent(QMouseEvent *e) override;
@@ -44,7 +44,7 @@ private:
   // 状态管理
   bool pressed = false;
   QPoint pressPos;
-  QElapsedTimer pressTimer;
+  // QElapsedTimer pressTimer;
   bool isSeeking = false;
   qint64 duration = 0;
   qint64 currentPts = 0;
