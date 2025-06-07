@@ -1,5 +1,6 @@
 #include "VideoPlayer.h"
 #include "qdebug.h"
+#include "qglobal.h"
 #include <QDebug>
 #include <QDir>
 #include <QFile>
@@ -408,7 +409,10 @@ void VideoPlayer::mouseReleaseEvent(QMouseEvent *) {
   pressed = false;
   if (isSeeking) {
     isSeeking = false;
+    // seek 前检查 duration 是否有效
+    if (duration > 0 && currentPts >= 0 && currentPts <= duration) {
     decoder->seek(currentPts);
+    }
     // seeking 时一直显示 overlay，不自动隐藏
     overlayBarTimer->stop();
     showOverlayBar = true;
