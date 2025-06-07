@@ -405,13 +405,18 @@ void VideoPlayer::mousePressEvent(QMouseEvent *e) {
   pressTimer.start();
 }
 
-void VideoPlayer::mouseReleaseEvent(QMouseEvent *) {
+void VideoPlayer::mouseReleaseEvent(QMouseEvent *e) {
   pressed = false;
+  // 长按判定：按下时间超过800ms则关闭窗口
+  if (pressTimer.isValid() && pressTimer.elapsed() > 800) {
+    close();
+    return;
+  }
   if (isSeeking) {
     isSeeking = false;
     // seek 前检查 duration 是否有效
     if (duration > 0 && currentPts >= 0 && currentPts <= duration) {
-    decoder->seek(currentPts);
+      decoder->seek(currentPts);
     }
     showOverlayBarForSeconds(5);
   } else {
@@ -429,7 +434,10 @@ void VideoPlayer::mouseReleaseEvent(QMouseEvent *) {
   }
 }
 
-void VideoPlayer::mouseDoubleClickEvent(QMouseEvent *) { close(); }
+// 移除双击关闭窗口
+void VideoPlayer::mouseDoubleClickEvent(QMouseEvent *) {
+  // 不再处理关闭
+}
 
 void VideoPlayer::mouseMoveEvent(QMouseEvent *e) {
   if (!pressed)
