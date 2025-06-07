@@ -177,8 +177,17 @@ void FFMpegDecoder::videoDecodeLoop() {
       }
       continue; // 立即进入下次循环，避免处理旧包
     }
-    if (av_read_frame(fmt_ctx, pkt) < 0)
-      break;
+    if (av_read_frame(fmt_ctx, pkt) < 0) {
+      // 播放结束，进入 idle 等待区，允许 seek/pause/stop
+      std::unique_lock<std::mutex> lk(m_mutex);
+      m_cond.wait(lk, [&] { return m_stop || m_seeking || !m_pause; });
+      if (m_stop)
+        break;
+      if (m_seeking)
+        continue; // 继续循环以处理 seek
+      // 若只是 pause，继续等待
+      continue;
+    }
     if (pkt->stream_index != vid_idx) {
       av_packet_unref(pkt);
       continue;
@@ -418,8 +427,17 @@ void FFMpegDecoder::audioDecodeLoop() {
       }
       continue; // 立即进入下次循环，避免处理旧包
     }
-    if (av_read_frame(fmt_ctx, pkt) < 0)
-      break;
+    if (av_read_frame(fmt_ctx, pkt) < 0) {
+      // 播放结束，进入 idle 等待区，允许 seek/pause/stop
+      std::unique_lock<std::mutex> lk(m_mutex);
+      m_cond.wait(lk, [&] { return m_stop || m_seeking || !m_pause; });
+      if (m_stop)
+        break;
+      if (m_seeking)
+        continue; // 继续循环以处理 seek
+      // 若只是 pause，继续等待
+      continue;
+    }
     if (pkt->stream_index != aid_idx) {
       av_packet_unref(pkt);
       continue;
