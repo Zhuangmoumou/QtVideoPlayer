@@ -127,9 +127,10 @@ void FFMpegDecoder::videoDecodeLoop() {
   // 视频输出 buffer
   int rgb_stride = vwidth * 3;
   uint8_t *rgb_buf = nullptr;
+  int rgb_buf_size = 0;
   if (vwidth && vheight) {
-    int numBytes = av_image_get_buffer_size(AV_PIX_FMT_RGB24, vwidth, vheight, 1);
-    rgb_buf = (uint8_t *)av_malloc(numBytes);
+    rgb_buf_size = av_image_get_buffer_size(AV_PIX_FMT_RGB24, vwidth, vheight, 1);
+    rgb_buf = (uint8_t *)av_malloc(rgb_buf_size);
   }
 
   AVPacket *pkt = av_packet_alloc();
@@ -215,6 +216,18 @@ void FFMpegDecoder::videoDecodeLoop() {
                      << frame->format;
           continue;
         }
+      }
+
+      // 检查分辨率变化，必要时重新分配 rgb_buf
+      if (frame->width != vwidth || frame->height != vheight) {
+        vwidth = frame->width;
+        vheight = frame->height;
+        rgb_stride = vwidth * 3;
+        int new_buf_size = av_image_get_buffer_size(AV_PIX_FMT_RGB24, vwidth, vheight, 1);
+        if (rgb_buf)
+          av_free(rgb_buf);
+        rgb_buf = (uint8_t *)av_malloc(new_buf_size);
+        rgb_buf_size = new_buf_size;
       }
 
       // 转为 RGB24
@@ -336,6 +349,10 @@ void FFMpegDecoder::audioDecodeLoop() {
   AVPacket *pkt = av_packet_alloc();
   AVFrame *frame = av_frame_alloc();
 
+  // 预分配音频输出缓冲区
+  uint8_t **out_buf = nullptr;
+  int out_buf_samples = 0;
+
   using clock = std::chrono::steady_clock;
   clock::time_point audio_playback_start_time;
   int64_t first_audio_pts = AV_NOPTS_VALUE;
@@ -403,9 +420,18 @@ void FFMpegDecoder::audioDecodeLoop() {
       int out_nb = av_rescale_rnd(
           swr_get_delay(swr_ctx, actx->sample_rate) + frame->nb_samples,
           OUT_SAMPLE_RATE, actx->sample_rate, AV_ROUND_UP);
-      uint8_t **out_buf = nullptr;
-      av_samples_alloc_array_and_samples(&out_buf, nullptr, OUT_CHANNELS,
-                                         out_nb, OUT_SAMPLE_FMT, 0);
+
+      // 仅当 out_nb 变化时重新分配 out_buf
+      if (out_nb > out_buf_samples) {
+        if (out_buf) {
+          av_freep(&out_buf[0]);
+          av_freep(&out_buf);
+        }
+        av_samples_alloc_array_and_samples(&out_buf, nullptr, OUT_CHANNELS,
+                                           out_nb, OUT_SAMPLE_FMT, 0);
+        out_buf_samples = out_nb;
+      }
+
       int converted =
           swr_convert(swr_ctx, out_buf, out_nb, (const uint8_t **)frame->data,
                       frame->nb_samples);
@@ -416,11 +442,14 @@ void FFMpegDecoder::audioDecodeLoop() {
       emit audioReady(pcm);
 
       emit positionChanged(ms);
-
-      av_freep(&out_buf[0]);
-      av_freep(&out_buf);
     }
     av_packet_unref(pkt);
+  }
+
+  // 循环结束后释放 out_buf
+  if (out_buf) {
+    av_freep(&out_buf[0]);
+    av_freep(&out_buf);
   }
 
   av_frame_free(&frame);
