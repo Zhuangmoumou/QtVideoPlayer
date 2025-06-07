@@ -6,6 +6,7 @@
 #include <QFile>
 #include <QMediaMetaData>
 #include <QMouseEvent>
+#include <QCoreApplication>
 #include <QPainter>
 #include <QPainterPath>
 #include <QTextStream>
@@ -403,15 +404,16 @@ void VideoPlayer::mousePressEvent(QMouseEvent *e) {
   pressed = true;
   pressPos = e->pos();
   pressTimer.start();
+  // 长按判定：800ms 后立即关闭窗口
+  QTimer::singleShot(800, this, [this]() {
+    if (pressed) {
+      close();
+    }
+  });
 }
 
 void VideoPlayer::mouseReleaseEvent(QMouseEvent *e) {
   pressed = false;
-  // 长按判定：按下时间超过800ms则关闭窗口
-  if (pressTimer.isValid() && pressTimer.elapsed() > 800) {
-    close();
-    return;
-  }
   if (isSeeking) {
     isSeeking = false;
     // seek 前检查 duration 是否有效
