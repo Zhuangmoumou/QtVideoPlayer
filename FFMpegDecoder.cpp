@@ -44,7 +44,7 @@ void FFMpegDecoder::stop() {
 void FFMpegDecoder::seek(qint64 ms) {
   m_seekTarget = ms;
   m_seeking = true;
-  m_cond.notify_all();
+  m_cond.notify_all(); // 唤醒所有线程
 }
 
 void FFMpegDecoder::togglePause() {
@@ -150,7 +150,7 @@ void FFMpegDecoder::videoDecodeLoop() {
     // pause
     if (m_pause) {
       std::unique_lock<std::mutex> lk(m_mutex);
-      m_cond.wait(lk, [&] { return m_stop || !m_pause; });
+      m_cond.wait(lk, [&] { return m_stop || !m_pause || m_seeking; });
       if (m_stop)
         break;
       playback_start_time = clock::now();
@@ -162,6 +162,10 @@ void FFMpegDecoder::videoDecodeLoop() {
       avcodec_flush_buffers(vctx);
       m_seeking = false;
       playback_start_time = clock::now();
+      // 丢弃所有未处理包
+      av_packet_unref(pkt);
+      av_frame_unref(frame);
+      continue; // 立即进入下次循环，避免处理旧包
     }
     if (av_read_frame(fmt_ctx, pkt) < 0)
       break;
@@ -169,8 +173,17 @@ void FFMpegDecoder::videoDecodeLoop() {
       av_packet_unref(pkt);
       continue;
     }
+    // seek 状态下丢弃包
+    if (m_seeking) {
+      av_packet_unref(pkt);
+      continue;
+    }
     avcodec_send_packet(vctx, pkt);
     while (avcodec_receive_frame(vctx, frame) == 0) {
+      // seek 状态下丢弃帧
+      if (m_seeking)
+        break;
+
       int64_t pts = frame->best_effort_timestamp;
       if (pts == AV_NOPTS_VALUE)
         pts = frame->pts;
@@ -368,7 +381,7 @@ void FFMpegDecoder::audioDecodeLoop() {
     // pause
     if (m_pause) {
       std::unique_lock<std::mutex> lk(m_mutex);
-      m_cond.wait(lk, [&] { return m_stop || !m_pause; });
+      m_cond.wait(lk, [&] { return m_stop || !m_pause || m_seeking; });
       if (m_stop)
         break;
       audio_playback_start_time = clock::now();
@@ -384,6 +397,10 @@ void FFMpegDecoder::audioDecodeLoop() {
       audio_playback_start_time = clock::now();
       first_audio_pts = AV_NOPTS_VALUE;
       first_audio_frame = true;
+      // 丢弃所有未处理包
+      av_packet_unref(pkt);
+      av_frame_unref(frame);
+      continue; // 立即进入下次循环，避免处理旧包
     }
     if (av_read_frame(fmt_ctx, pkt) < 0)
       break;
@@ -391,8 +408,17 @@ void FFMpegDecoder::audioDecodeLoop() {
       av_packet_unref(pkt);
       continue;
     }
+    // seek 状态下丢弃包
+    if (m_seeking) {
+      av_packet_unref(pkt);
+      continue;
+    }
     avcodec_send_packet(actx, pkt);
     while (avcodec_receive_frame(actx, frame) == 0) {
+      // seek 状态下丢弃帧
+      if (m_seeking)
+        break;
+
       if (frame->nb_samples == 0) {
         continue;
       }
