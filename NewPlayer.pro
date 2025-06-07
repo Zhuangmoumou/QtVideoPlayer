@@ -4,12 +4,10 @@ CONFIG   += c++11
 TEMPLATE = app
 
 SOURCES += main.cpp \
-           FileBrowser.cpp \
            VideoPlayer.cpp \
            FFMpegDecoder.cpp
 
-HEADERS += FileBrowser.h \
-           VideoPlayer.h \
+HEADERS += VideoPlayer.h \
            FFMpegDecoder.h
 
 QMAKE_CXXFLAGS += -Wno-deprecated-declarations
