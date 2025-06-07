@@ -543,6 +543,18 @@ void VideoPlayer::paintEvent(QPaintEvent *) {
     int radius = barHeight / 2;
     p.setRenderHint(QPainter::Antialiasing, true);
 
+    // 阴影
+    {
+      QPainterPath shadowPath;
+      shadowPath.addRoundedRect(bar.adjusted(-2, 2, 2, 6), radius + 2, radius + 2);
+      QColor shadowColor(0, 0, 0, 80);
+      p.save();
+      p.setPen(Qt::NoPen);
+      p.setBrush(shadowColor);
+      p.drawPath(shadowPath);
+      p.restore();
+    }
+
     // 背景
     p.setPen(Qt::NoPen);
     p.setBrush(QColor(255, 255, 255, 60));
