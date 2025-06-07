@@ -353,6 +353,10 @@ void VideoPlayer::onFrame(const QImage &frame) {
 void VideoPlayer::onAudioData(const QByteArray &data) { audioIO->write(data); }
 
 void VideoPlayer::onPositionChanged(qint64 pts) {
+  // 拖动 seeking 时不更新进度条进度
+  if (isSeeking) {
+    return;
+  }
   currentPts = pts;
   // 修正歌词下标同步，支持快退
   int idx = 0;
@@ -394,10 +398,22 @@ void VideoPlayer::mouseReleaseEvent(QMouseEvent *) {
   if (isSeeking) {
     isSeeking = false;
     decoder->seek(currentPts);
-    showOverlayBarForSeconds(5); // 拖动进度条后显示 overlay
+    // seeking 时一直显示 overlay，不自动隐藏
+    overlayBarTimer->stop();
+    showOverlayBar = true;
+    update();
   } else {
     decoder->togglePause();
-    showOverlayBarForSeconds(300); // 暂停/播放切换时显示 overlay
+    // 判断当前是否为暂停状态
+    if (decoder->isPaused()) {
+      // 暂停时一直显示 overlay
+      overlayBarTimer->stop();
+      showOverlayBar = true;
+      update();
+    } else {
+      // 播放时显示 5 秒 overlay
+      showOverlayBarForSeconds(5);
+    }
   }
 }
 

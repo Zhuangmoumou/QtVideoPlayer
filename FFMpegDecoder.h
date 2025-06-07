@@ -22,6 +22,7 @@ public:
   void stop();
   void seek(qint64 ms);
   void togglePause();
+  bool isPaused() const; // 新增：判断是否暂停
 
 signals:
   void frameReady(const QImage &img);

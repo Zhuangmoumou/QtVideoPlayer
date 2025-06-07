@@ -50,6 +50,10 @@ void FFMpegDecoder::togglePause() {
     m_cond.notify_all();
 }
 
+bool FFMpegDecoder::isPaused() const {
+  return m_pause;
+}
+
 void FFMpegDecoder::decodeLoop() {
   AVFormatContext *fmt_ctx = nullptr;
   if (avformat_open_input(&fmt_ctx, m_path.toUtf8().constData(), nullptr,
