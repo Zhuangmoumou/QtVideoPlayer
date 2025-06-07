@@ -32,7 +32,8 @@ signals:
 
 private:
   // 线程与同步
-  std::thread m_thread;
+  std::thread m_videoThread;
+  std::thread m_audioThread;
   std::atomic<bool> m_stop{false};
   std::atomic<bool> m_pause{false};
   std::atomic<bool> m_seeking{false};
@@ -40,9 +41,13 @@ private:
   std::mutex m_mutex;
   std::condition_variable m_cond;
 
+  // 音频时钟（ms）
+  std::atomic<qint64> m_audioClockMs{0};
+
   // 播放参数
   QString m_path;
 
   // 解码主循环
-  void decodeLoop();
+  void videoDecodeLoop();
+  void audioDecodeLoop();
 };
