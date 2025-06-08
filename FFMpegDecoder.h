@@ -45,6 +45,9 @@ private:
   bool m_videoSeekHandled = false;
   bool m_audioSeekHandled = false;
 
+  // 播放结束标志
+  std::atomic<bool> m_eof{false}; // 新增
+
   // 音频时钟（ms）
   std::atomic<qint64> m_audioClockMs{0};
 

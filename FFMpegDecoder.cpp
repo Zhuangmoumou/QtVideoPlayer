@@ -29,6 +29,7 @@ void FFMpegDecoder::start(const QString &path) {
   m_seeking = false;
   m_videoSeekHandled = false; // 新增
   m_audioSeekHandled = false; // 新增
+  m_eof = false; // 新增
 
   m_videoThread = std::thread(&FFMpegDecoder::videoDecodeLoop, this);
   m_audioThread = std::thread(&FFMpegDecoder::audioDecodeLoop, this);
@@ -36,6 +37,7 @@ void FFMpegDecoder::start(const QString &path) {
 
 void FFMpegDecoder::stop() {
   m_stop = true;
+  m_eof = false; // 新增
   m_cond.notify_all();
   if (m_videoThread.joinable())
     m_videoThread.join();
@@ -48,6 +50,7 @@ void FFMpegDecoder::seek(qint64 ms) {
   m_seeking = true;
   m_videoSeekHandled = false; // 新增
   m_audioSeekHandled = false; // 新增
+  m_eof = false; // 新增
   m_cond.notify_all(); // 唤醒所有线程
 }
 
@@ -179,13 +182,15 @@ void FFMpegDecoder::videoDecodeLoop() {
     }
     if (av_read_frame(fmt_ctx, pkt) < 0) {
       // 播放结束，进入 idle 等待区，允许 seek/pause/stop
+      m_eof = true; // 新增
       std::unique_lock<std::mutex> lk(m_mutex);
-      // 增加超时等待，避免空转消耗 CPU
-      m_cond.wait_for(lk, std::chrono::milliseconds(50), [&] { return m_stop || m_seeking || !m_pause; });
+      m_cond.wait(lk, [&] { return m_stop || m_seeking || m_eof == false; });
       if (m_stop)
         break;
-      if (m_seeking)
+      if (m_seeking) {
+        m_eof = false; // 新增
         continue; // 继续循环以处理 seek
+      }
       // 若只是 pause，继续等待
       continue;
     }
@@ -430,13 +435,15 @@ void FFMpegDecoder::audioDecodeLoop() {
     }
     if (av_read_frame(fmt_ctx, pkt) < 0) {
       // 播放结束，进入 idle 等待区，允许 seek/pause/stop
+      m_eof = true; // 新增
       std::unique_lock<std::mutex> lk(m_mutex);
-      // 增加超时等待，避免空转消耗 CPU
-      m_cond.wait_for(lk, std::chrono::milliseconds(50), [&] { return m_stop || m_seeking || !m_pause; });
+      m_cond.wait(lk, [&] { return m_stop || m_seeking || m_eof == false; });
       if (m_stop)
         break;
-      if (m_seeking)
+      if (m_seeking) {
+        m_eof = false; // 新增
         continue; // 继续循环以处理 seek
+      }
       // 若只是 pause，继续等待
       continue;
     }
