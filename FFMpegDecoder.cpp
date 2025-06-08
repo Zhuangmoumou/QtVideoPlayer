@@ -403,6 +403,7 @@ void FFMpegDecoder::audioDecodeLoop() {
       m_cond.wait(lk, [&] { return m_stop || !m_pause || m_seeking; });
       if (m_stop)
         break;
+      // 重置同步基准
       audio_playback_start_time = clock::now();
       first_audio_pts = AV_NOPTS_VALUE;
       first_audio_frame = true;
@@ -412,6 +413,7 @@ void FFMpegDecoder::audioDecodeLoop() {
       int64_t ts = m_seekTarget * (AV_TIME_BASE / 1000);
       av_seek_frame(fmt_ctx, -1, ts, AVSEEK_FLAG_BACKWARD);
       avcodec_flush_buffers(actx);
+      // 重置同步基准
       audio_playback_start_time = clock::now();
       first_audio_pts = AV_NOPTS_VALUE;
       first_audio_frame = true;
@@ -468,6 +470,7 @@ void FFMpegDecoder::audioDecodeLoop() {
       // 更新音频时钟
       m_audioClockMs.store(ms);
 
+      // ----------- 修正同步基准 begin -----------
       if (first_audio_frame) {
         audio_playback_start_time = clock::now();
         first_audio_pts = ms;
@@ -477,10 +480,12 @@ void FFMpegDecoder::audioDecodeLoop() {
                               clock::now() - audio_playback_start_time)
                               .count();
         int64_t diff = (ms - first_audio_pts) - elapsed;
-        if (diff > 0 && diff < 30) {
+        // 限制最大 sleep 避免卡顿
+        if (diff > 0 && diff < 100) {
           std::this_thread::sleep_for(std::chrono::milliseconds(diff));
         }
       }
+      // ----------- 修正同步基准 end -------------
 
       // 重采样
       int out_nb = av_rescale_rnd(
