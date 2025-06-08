@@ -473,8 +473,13 @@ void VideoPlayer::mouseMoveEvent(QMouseEvent *e) {
 }
 
 void VideoPlayer::seekByDelta(int dx) {
-  // 优化：提升灵敏度，每像素 20ms
-  qint64 delta = dx * 20; // ms per px
+  // 动态调整每像素对应的毫秒数，随视频时长自适应
+  // 例如：每像素调整为总时长的1/500，限制最小20ms，最大2000ms
+  qint64 msPerPx = 20;
+  if (duration > 0) {
+    msPerPx = qBound<qint64>(20, duration / 3000, 2000);
+  }
+  qint64 delta = dx * msPerPx;
   qint64 target = qBound<qint64>(0, currentPts + delta, duration);
   currentPts = target;
 }
