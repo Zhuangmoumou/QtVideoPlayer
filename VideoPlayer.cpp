@@ -406,7 +406,7 @@ void VideoPlayer::mousePressEvent(QMouseEvent *e) {
   // 移除长按关闭窗口逻辑
 }
 
-void VideoPlayer::mouseReleaseEvent(QMouseEvent *e) {
+void VideoPlayer::mouseReleaseEvent(QMouseEvent *) {
   pressed = false;
   if (isSeeking) {
     isSeeking = false;
@@ -568,7 +568,7 @@ void VideoPlayer::paintEvent(QPaintEvent *) {
       if (playedWidth < bar.height()) {
         // 只画左侧半圆
         QPainterPath path;
-        path.moveTo(bar.left(), bar.top() + bar.height() / 2);
+        path.moveTo(bar.left(), bar.top() + bar.height() / 2.0);
         path.arcTo(bar.left(), bar.top(), bar.height(), bar.height(), 90, 180);
         path.closeSubpath();
         p.fillPath(path, Qt::white);
