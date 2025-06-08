@@ -91,6 +91,8 @@ private:
   // 统一 overlay 字号
   int overlayFontSize = 9;
 
+  QTimer *subtitleCheckTimer = nullptr;
+
   void loadCoverAndLyrics(const QString &path);
   void seekByDelta(int dx);
   void showOverlay(bool visible);

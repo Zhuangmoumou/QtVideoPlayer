@@ -76,12 +76,32 @@ VideoPlayer::VideoPlayer(QWidget *parent) : QWidget(parent) {
     update();
   });
   scrollOffset = 0;
+
+  // 新增：字幕定时检查定时器
+  subtitleCheckTimer = new QTimer(this);
+  subtitleCheckTimer->setInterval(1000);
+  connect(subtitleCheckTimer, &QTimer::timeout, this, [this]() {
+    if (!subtitles.isEmpty()) {
+      bool found = false;
+      for (int i = 0; i < subtitles.size(); ++i) {
+        if (currentPts >= subtitles[i].startTime && currentPts <= subtitles[i].endTime) {
+          found = true;
+          break;
+        }
+      }
+      if (!found && currentSubtitleIndex != -1) {
+        currentSubtitleIndex = -1;
+        update();
+      }
+    }
+  });
 }
 
 VideoPlayer::~VideoPlayer() {
   decoder->stop();
   audioOutput->stop();
   scrollTimer->stop();
+  subtitleCheckTimer->stop();
 }
 
 void VideoPlayer::play(const QString &path) {
@@ -146,6 +166,9 @@ void VideoPlayer::play(const QString &path) {
 
   // 启动滚动定时器
   scrollTimer->start();
+
+  // 启动字幕定时检查
+  subtitleCheckTimer->start();
 }
 
 void VideoPlayer::loadCoverAndLyrics(const QString &path) {
