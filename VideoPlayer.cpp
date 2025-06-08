@@ -384,13 +384,14 @@ void VideoPlayer::onPositionChanged(qint64 pts) {
   }
 
   // SRT 字幕同步
-  int subIdx = -1;
+  int subIdx = currentSubtitleIndex; // 保持上一次索引，避免闪烁
   for (int i = 0; i < subtitles.size(); ++i) {
     if (pts >= subtitles[i].startTime && pts <= subtitles[i].endTime) {
       subIdx = i;
       break;
     }
   }
+  // 仅当字幕实际切换时才更新
   if (currentSubtitleIndex != subIdx) {
     currentSubtitleIndex = subIdx;
     update();
