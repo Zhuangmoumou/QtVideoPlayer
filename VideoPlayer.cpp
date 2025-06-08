@@ -17,6 +17,7 @@
 #include <taglib/tag.h>
 #include <taglib/unsynchronizedlyricsframe.h>
 #include <taglib/xiphcomment.h>
+#include <ass/ass.h> // 新增
 
 VideoPlayer::VideoPlayer(QWidget *parent) : QWidget(parent) {
   setAttribute(Qt::WA_AcceptTouchEvents);
@@ -95,6 +96,15 @@ VideoPlayer::VideoPlayer(QWidget *parent) : QWidget(parent) {
       }
     }
   });
+
+  // 新增：libass 初始化
+  assLibrary = ass_library_init();
+  assRenderer = assLibrary ? ass_renderer_init(assLibrary) : nullptr;
+  if (assRenderer) {
+    ass_set_fonts(assRenderer, nullptr, "Microsoft YaHei", 1, nullptr, 1);
+  }
+  assTrack = nullptr;
+  hasAssSubtitle = false;
 }
 
 VideoPlayer::~VideoPlayer() {
@@ -102,19 +112,45 @@ VideoPlayer::~VideoPlayer() {
   audioOutput->stop();
   scrollTimer->stop();
   subtitleCheckTimer->stop();
+
+  // 新增：libass 资源释放
+  if (assTrack) {
+    ass_free_track(assTrack);
+    assTrack = nullptr;
+  }
+  if (assRenderer) {
+    ass_renderer_done(assRenderer);
+    assRenderer = nullptr;
+  }
+  if (assLibrary) {
+    ass_library_done(assLibrary);
+    assLibrary = nullptr;
+  }
 }
 
 void VideoPlayer::play(const QString &path) {
   loadCoverAndLyrics(path);
   currentLyricIndex = 0; // 播放新文件时重置歌词下标
 
-  // 新增：加载同名 srt 字幕
+  // 新增：加载同名 ass 字幕（优先于 srt）
   subtitles.clear();
   currentSubtitleIndex = -1;
+  hasAssSubtitle = false;
+  if (assTrack) {
+    ass_free_track(assTrack);
+    assTrack = nullptr;
+  }
+  QString assPath = QFileInfo(path).absolutePath() + "/" +
+                    QFileInfo(path).completeBaseName() + ".ass";
+  if (QFile::exists(assPath)) {
+    loadAssSubtitle(assPath);
+  } else {
+    // 没有 ass 再尝试 srt
   QString srtPath = QFileInfo(path).absolutePath() + "/" +
                     QFileInfo(path).completeBaseName() + ".srt";
   if (QFile::exists(srtPath)) {
     loadSrtSubtitle(srtPath);
+    }
   }
 
   // 读取视频/音频信息
@@ -376,8 +412,23 @@ void VideoPlayer::loadSrtSubtitle(const QString &path) {
         text += "\n";
       text += t;
     }
-    subtitles.append({start, end, text});
+    subtitles.append({start, end, text, ""});
   }
+}
+
+void VideoPlayer::loadAssSubtitle(const QString &path) {
+  hasAssSubtitle = false;
+  if (!assLibrary || !assRenderer)
+    return;
+  QFile f(path);
+  if (!f.open(QIODevice::ReadOnly | QIODevice::Text))
+    return;
+  if (assTrack) {
+    ass_free_track(assTrack);
+    assTrack = nullptr;
+  }
+  assTrack = ass_read_file(assLibrary, path.toUtf8().constData(), nullptr);
+  hasAssSubtitle = (assTrack != nullptr);
 }
 
 void VideoPlayer::onFrame(const QImage &frame) {
@@ -768,6 +819,30 @@ void VideoPlayer::paintEvent(QPaintEvent *) {
     p.setPen(textColor);
     p.drawText(textRect, Qt::AlignHCenter | Qt::AlignVCenter, lyricText);
     p.restore();
+  }
+
+  // --- 最后绘制 ASS 字幕，保证 UI 不被遮挡 ---
+  if (hasAssSubtitle && assTrack && assRenderer) {
+    int w = width(), h = height();
+    ass_set_frame_size(assRenderer, w, h);
+    long long now = currentPts;
+    // 如果 currentPts 单位为微秒，需改为：long long now = currentPts / 1000;
+    int detectChange = 0;
+    ASS_Image *img = ass_render_frame(assRenderer, assTrack, now, &detectChange);
+    for (; img; img = img->next) {
+      QImage qimg((const uchar *)img->bitmap, img->w, img->h, img->stride, QImage::Format_Alpha8);
+      QColor color;
+      color.setRgba(qRgba((img->color >> 24) & 0xFF, (img->color >> 16) & 0xFF, (img->color >> 8) & 0xFF, 255 - (img->color & 0xFF)));
+      QImage colored(qimg.size(), QImage::Format_ARGB32_Premultiplied);
+      colored.fill(Qt::transparent);
+      QPainter qp(&colored);
+      qp.setCompositionMode(QPainter::CompositionMode_Source);
+      qp.fillRect(qimg.rect(), color);
+      qp.setCompositionMode(QPainter::CompositionMode_DestinationIn);
+      qp.drawImage(0, 0, qimg);
+      qp.end();
+      p.drawImage(img->dst_x, img->dst_y, colored);
+    }
   }
 }
 

@@ -4,6 +4,7 @@
 #include <QMap>
 #include <QTimer>
 #include <QWidget>
+#include <ass/ass.h> // 新增：libass 头文件
 
 #include "FFMpegDecoder.h"
 
@@ -62,15 +63,23 @@ private:
   int lastLyricIndex = -1;
   QElapsedTimer lyricFadeTimer;
 
-  // SRT 字幕支持
+  // SRT/ASS 字幕支持
   struct SubtitleLine {
     qint64 startTime;
     qint64 endTime;
     QString text;
+    QString assRaw; // 新增：原始 ass 行（用于样式渲染）
   };
   QList<SubtitleLine> subtitles;
   int currentSubtitleIndex = -1;
   void loadSrtSubtitle(const QString &path);
+  void loadAssSubtitle(const QString &path); // 新增：加载 ass 字幕
+
+  // libass 相关
+  ASS_Library *assLibrary = nullptr;
+  ASS_Renderer *assRenderer = nullptr;
+  ASS_Track *assTrack = nullptr;
+  bool hasAssSubtitle = false;
 
   QImage currentFrame;
   QString videoInfoLabel;
