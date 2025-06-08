@@ -64,11 +64,11 @@ void FFMpegDecoder::videoDecodeLoop() {
   AVFormatContext *fmt_ctx = nullptr;
   if (avformat_open_input(&fmt_ctx, m_path.toUtf8().constData(), nullptr,
                           nullptr) < 0) {
-    qWarning() << "无法打开输入文件:" << m_path;
+    qWarning() << "Failed to open input file:" << m_path;
     return;
   }
   if (avformat_find_stream_info(fmt_ctx, nullptr) < 0) {
-    qWarning() << "无法获取流信息";
+    qWarning() << "Failed to get stream info";
     avformat_close_input(&fmt_ctx);
     return;
   }
@@ -99,25 +99,25 @@ void FFMpegDecoder::videoDecodeLoop() {
     iter = av_codec_next(iter);
   }
   if (!vcodec) {
-    qWarning() << "未找到视频解码器";
+    qWarning() << "Video decoder not found";
     avformat_close_input(&fmt_ctx);
     return;
   }
   AVCodecContext *vctx = avcodec_alloc_context3(vcodec);
   if (!vctx) {
-    qWarning() << "无法分配视频解码上下文";
+    qWarning() << "Failed to allocate video decoder context";
     avformat_close_input(&fmt_ctx);
     return;
   }
   if (avcodec_parameters_to_context(vctx, fmt_ctx->streams[vid_idx]->codecpar) <
       0) {
-    qWarning() << "无法复制视频解码参数";
+    qWarning() << "Failed to copy video decoder parameters";
     avcodec_free_context(&vctx);
     avformat_close_input(&fmt_ctx);
     return;
   }
   if (avcodec_open2(vctx, vcodec, nullptr) < 0) {
-    qWarning() << "无法打开视频解码器";
+    qWarning() << "Failed to open video decoder";
     avcodec_free_context(&vctx);
     avformat_close_input(&fmt_ctx);
     return;
@@ -226,13 +226,11 @@ void FFMpegDecoder::videoDecodeLoop() {
             diff = ms - audioClock;
           }
           if (diff > 80) {
-            // 仍然超前，跳过显示该帧
-            qWarning() << "丢弃视频帧: 视频超前音频过多 (差值 =" << diff << "ms, 视频 ms =" << ms << ", 音频 ms =" << audioClock << ")";
+            qWarning() << "Drop video frame: video ahead of audio (diff =" << diff << "ms, video ms =" << ms << ", audio ms =" << audioClock << ")";
             continue;
           }
         } else if (diff < -300) { // 放宽丢帧阈值
-          // 视频帧比音频慢太多，丢弃该帧
-          qWarning() << "丢弃视频帧: 视频落后音频过多 (差值 =" << diff << "ms, 视频 ms =" << ms << ", 音频 ms =" << audioClock << ")";
+          qWarning() << "Drop video frame: video lags audio too much (diff =" << diff << "ms, video ms =" << ms << ", audio ms =" << audioClock << ")";
           continue;
         }
         // 否则正常显示
@@ -249,7 +247,7 @@ void FFMpegDecoder::videoDecodeLoop() {
             nullptr);
         sws_src_pix_fmt = frame->format;
         if (!sws_ctx) {
-          qWarning() << "无法初始化 sws 上下文，格式为"
+          qWarning() << "Failed to initialize sws context, format:"
                      << frame->format;
           continue;
         }
@@ -278,7 +276,7 @@ void FFMpegDecoder::videoDecodeLoop() {
 
       if (img.isNull()) {
         qWarning()
-            << "QImage 构造后 isNull，回退到复制缓冲区";
+            << "QImage isNull after construction, fallback to buffer copy";
         QByteArray tmp((const char *)rgb_buf, vheight * rgb_stride);
         QImage img2((const uchar *)tmp.constData(), vwidth, vheight,
                     QImage::Format_RGB888);
@@ -308,11 +306,11 @@ void FFMpegDecoder::audioDecodeLoop() {
   AVFormatContext *fmt_ctx = nullptr;
   if (avformat_open_input(&fmt_ctx, m_path.toUtf8().constData(), nullptr,
                           nullptr) < 0) {
-    qWarning() << "无法打开输入文件:" << m_path;
+    qWarning() << "Failed to open input file:" << m_path;
     return;
   }
   if (avformat_find_stream_info(fmt_ctx, nullptr) < 0) {
-    qWarning() << "无法获取流信息";
+    qWarning() << "Failed to get stream info";
     avformat_close_input(&fmt_ctx);
     return;
   }
@@ -343,25 +341,25 @@ void FFMpegDecoder::audioDecodeLoop() {
     iter = av_codec_next(iter);
   }
   if (!acodec) {
-    qWarning() << "未找到音频解码器";
+    qWarning() << "Audio decoder not found";
     avformat_close_input(&fmt_ctx);
     return;
   }
   AVCodecContext *actx = avcodec_alloc_context3(acodec);
   if (!actx) {
-    qWarning() << "无法分配音频解码上下文";
+    qWarning() << "Failed to allocate audio decoder context";
     avformat_close_input(&fmt_ctx);
     return;
   }
   if (avcodec_parameters_to_context(actx, fmt_ctx->streams[aid_idx]->codecpar) <
       0) {
-    qWarning() << "无法复制音频解码参数";
+    qWarning() << "Failed to copy audio decoder parameters";
     avcodec_free_context(&actx);
     avformat_close_input(&fmt_ctx);
     return;
   }
   if (avcodec_open2(actx, acodec, nullptr) < 0) {
-    qWarning() << "无法打开音频解码器";
+    qWarning() << "Failed to open audio decoder";
     avcodec_free_context(&actx);
     avformat_close_input(&fmt_ctx);
     return;
@@ -375,10 +373,10 @@ void FFMpegDecoder::audioDecodeLoop() {
                          OUT_SAMPLE_FMT, OUT_SAMPLE_RATE, actx->channel_layout,
                          actx->sample_fmt, actx->sample_rate, 0, nullptr);
   if (!swr_ctx) {
-    qWarning() << "无法分配音频重采样上下文";
+    qWarning() << "Failed to allocate audio resample context";
   } else {
     if (swr_init(swr_ctx) < 0) {
-      qWarning() << "无法初始化音频重采样上下文";
+      qWarning() << "Failed to initialize audio resample context";
       swr_free(&swr_ctx);
       swr_ctx = nullptr;
     }

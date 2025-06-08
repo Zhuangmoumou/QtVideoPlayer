@@ -23,9 +23,12 @@ int main(int argc, char *argv[])
     }
 
     if (showHelp) {
-        qDebug() << "用法: NewPlayer <视频文件路径>";
-        qDebug() << "参数:";
-        qDebug() << "  --help, -h          显示帮助信息";
+        // qDebug() << "用法: NewPlayer <视频文件路径>";
+        qDebug() << "Usage: NewPlayer <video file path>";
+        // qDebug() << "参数:";
+        qDebug() << "Options:";
+        // qDebug() << "  --help, -h          显示帮助信息";
+        qDebug() << "  --help, -h          Show help information";
         return 0;
     }
 
@@ -36,7 +39,8 @@ int main(int argc, char *argv[])
         player->play(path);
         return app.exec();
     } else {
-        qDebug() << "未指定视频文件路径。使用 --help 查看用法。";
+        // qDebug() << "未指定视频文件路径。使用 --help 查看用法。";
+        qDebug() << "No video file path specified. Use --help to see usage.";
         return 0;
     }
 }
