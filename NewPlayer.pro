@@ -12,18 +12,14 @@ HEADERS += VideoPlayer.h \
 
 QMAKE_CXXFLAGS += -Wno-deprecated-declarations
 
-INCLUDEPATH += /home/lyrecoul/ffmpeg-3.4.8/include/ /home/lyrecoul/TagLib/usr/local/include/
-LIBS += -L/home/lyrecoul/PenDevelopment/lib \
+INCLUDEPATH += $$PWD/include/
+LIBS += -L$$PWD/libs/taglib -ltag \
+        -L$$PWD/libs/libass -lass -lfribidi -lharfbuzz -lunibreak \
+        -L/home/lyrecoul/PenDevelopment/lib \
         -lavformat -lavcodec -lavutil -lswscale -lswresample \
         -lavdevice -lz -lasound -lavfilter \
-        -lfontconfig -lexpat -lpng16 -lglib-2.0 -lpcre2-8 \
-        -ldrm -lmali -lfreetype -lssl -lcrypto -lrockchip_mpp -lvorbisenc \
+        -lfontconfig -lfreetype -lexpat -lpng16 -lglib-2.0 -lpcre2-8 \
+        -ldrm -lmali -lssl -lcrypto -lrockchip_mpp -lvorbisenc \
         -lvorbis -lmp3lame -lavresample -lpcre -logg \
         -ltheoradec -ltheoraenc -lm -ldl -lgbm -lwayland-client \
-        -lwayland-server -lffi \
-        -L/home/lyrecoul/TagLib/usr/local/lib/ -ltag
-
-# INCLUDEPATH += /home/lyrecoul/ffmpeg-3.4.8/include/ /home/lyrecoul/TagLib/usr/local/include/
-# LIBS += -L/home/lyrecoul/ffmpeg-3.4.8/lib/ \
-#         -lavformat -lavcodec -lavutil -lswscale -lswresample \
-#         -lavdevice  -lavfilter -ltag
+        -lwayland-server -lffi
