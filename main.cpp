@@ -1,5 +1,6 @@
 #include <QApplication>
 #include <QDebug>
+#include <QFileInfo>
 #include "VideoPlayer.h"
 #include "qapplication.h"
 
@@ -33,6 +34,12 @@ int main(int argc, char *argv[])
     }
 
     if (!path.isEmpty()) {
+        // 检查路径是否为有效文件
+        QFileInfo fileInfo(path);
+        if (!fileInfo.exists() || !fileInfo.isFile()) {
+            qDebug() << "Invalid video file path:" << path;
+            return 1;
+        }
         // 带参数启动，直接全屏播放
         VideoPlayer *player = new VideoPlayer;
         player->setWindowState(Qt::WindowFullScreen);
