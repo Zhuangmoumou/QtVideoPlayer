@@ -430,7 +430,8 @@ void FFMpegDecoder::audioDecodeLoop() {
     if (av_read_frame(fmt_ctx, pkt) < 0) {
       // 播放结束，进入 idle 等待区，允许 seek/pause/stop
       std::unique_lock<std::mutex> lk(m_mutex);
-      m_cond.wait(lk, [&] { return m_stop || m_seeking || !m_pause; });
+      // 增加超时等待，避免空转消耗 CPU
+      m_cond.wait_for(lk, std::chrono::milliseconds(50), [&] { return m_stop || m_seeking || !m_pause; });
       if (m_stop)
         break;
       if (m_seeking)
