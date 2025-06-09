@@ -5,6 +5,7 @@
 #include <QTimer>
 #include <QWidget>
 #include <ass/ass.h> // 新增：libass 头文件
+#include <QFileSystemWatcher> // 新增
 
 #include "FFMpegDecoder.h"
 
@@ -105,4 +106,6 @@ private:
   void loadCoverAndLyrics(const QString &path);
   void seekByDelta(int dx);
   void showOverlay(bool visible);
+
+  QFileSystemWatcher *screenStatusWatcher;
 };

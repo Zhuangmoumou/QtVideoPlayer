@@ -17,7 +17,8 @@
 #include <taglib/tag.h>
 #include <taglib/unsynchronizedlyricsframe.h>
 #include <taglib/xiphcomment.h>
-#include <ass/ass.h> // 新增
+#include <ass/ass.h>
+#include <QProcess> // 新增
 
 VideoPlayer::VideoPlayer(QWidget *parent) : QWidget(parent) {
   setAttribute(Qt::WA_AcceptTouchEvents);
@@ -105,6 +106,17 @@ VideoPlayer::VideoPlayer(QWidget *parent) : QWidget(parent) {
   }
   assTrack = nullptr;
   hasAssSubtitle = false;
+
+  // 新增：屏幕状态文件监听
+  screenStatusWatcher = new QFileSystemWatcher(this);
+  QString screenStatusPath = "/tmp/screen_status";
+  QString screenStatusDir = QFileInfo(screenStatusPath).absolutePath();
+  screenStatusWatcher->addPath(screenStatusDir);
+  connect(screenStatusWatcher, &QFileSystemWatcher::directoryChanged, this, [screenStatusPath]() {
+    if (QFile::exists(screenStatusPath)) {
+      // 屏幕关闭，自动启动音频输出
+      QTimer::singleShot(3000, []() {QProcess::execute("ubus", QStringList() << "call" << "eq_drc_process.output.rpc" << "control" << R"({"action":"Open"})");});}
+  });
 }
 
 VideoPlayer::~VideoPlayer() {
@@ -126,9 +138,15 @@ VideoPlayer::~VideoPlayer() {
     ass_library_done(assLibrary);
     assLibrary = nullptr;
   }
+
+  // 关闭音频输出（使用 startDetached，避免不执行）
+  // QProcess::startDetached("ubus", QStringList() << "call" << "eq_drc_process.output.rpc" << "control" << R"({"action":"Close"})");
 }
 
 void VideoPlayer::play(const QString &path) {
+  // 启动音频输出
+  QProcess::execute("ubus", QStringList() << "call" << "eq_drc_process.output.rpc" << "control" << R"({"action":"Open"})");
+
   loadCoverAndLyrics(path);
   currentLyricIndex = 0; // 播放新文件时重置歌词下标
 
