@@ -99,7 +99,7 @@ private:
   QTimer *scrollPauseTimer = nullptr;
 
   // 统一 overlay 字号
-  int overlayFontSize = 9;
+  int overlayFontSize = 10;
 
   QTimer *subtitleCheckTimer = nullptr;
 

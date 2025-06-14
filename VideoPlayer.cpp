@@ -546,7 +546,7 @@ void VideoPlayer::seekByDelta(int dx) {
   // 例如：每像素调整为总时长的1/500，限制最小20ms，最大2000ms
   qint64 msPerPx = 20;
   if (duration > 0) {
-    msPerPx = qBound<qint64>(20, duration / 3000, 2000);
+    msPerPx = qBound<qint64>(20, duration / 5000, 2000);
   }
   qint64 delta = dx * msPerPx;
   qint64 target = qBound<qint64>(0, currentPts + delta, duration);
@@ -587,7 +587,7 @@ void VideoPlayer::paintEvent(QPaintEvent *) {
       QFont infoFont("Microsoft YaHei", overlayFontSize - 2, QFont::Bold); // 使用统一字号
       p.setFont(infoFont);
       p.setPen(Qt::white);
-      QRect infoRect = QRect(10, 10, width() / 3, 20);
+      QRect infoRect = QRect(10, 10, width() / 1.5, 22);
       p.setBrush(QColor(0, 0, 0, 128));
       p.setRenderHint(QPainter::Antialiasing, true);
       p.drawRoundedRect(infoRect.adjusted(-4, -2, 4, 2), 6, 6);
@@ -742,7 +742,7 @@ void VideoPlayer::paintEvent(QPaintEvent *) {
       }
 
       if (opacity > 0.01) {
-        QFont subFont("Microsoft YaHei", overlayFontSize, QFont::Bold); // 使用统一字号
+        QFont subFont("Microsoft YaHei", overlayFontSize-2, QFont::Bold); // 使用统一字号
         p.setFont(subFont);
 
         QRect textRect = p.fontMetrics().boundingRect(
@@ -784,7 +784,7 @@ void VideoPlayer::paintEvent(QPaintEvent *) {
   }
   // 当前歌词
   if (currentLyricIndex < lyrics.size()) {
-    QFont lyricFont("Microsoft YaHei", overlayFontSize, QFont::Bold); // 使用统一字号
+    QFont lyricFont("Microsoft YaHei", overlayFontSize-2, QFont::Bold); // 使用统一字号
     p.setFont(lyricFont);
 
     // Youtube 风格：黑色半透明背景，白色文字
