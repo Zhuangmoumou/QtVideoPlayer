@@ -584,7 +584,7 @@ void VideoPlayer::paintEvent(QPaintEvent *) {
   if (showOverlayBar) {
     // 左上角视频信息标签
     if (!videoInfoLabel.isEmpty() || !currentFileName.isEmpty()) {
-      QFont infoFont("Microsoft YaHei", overlayFontSize - 2, QFont::Bold); // 使用统一字号
+      QFont infoFont("Microsoft YaHei", overlayFontSize, QFont::Bold); // 使用统一字号
       p.setFont(infoFont);
       p.setPen(Qt::white);
       QRect infoRect = QRect(10, 10, width() / 1.5, 22);
@@ -813,7 +813,7 @@ void VideoPlayer::paintEvent(QPaintEvent *) {
   // 上一行歌词淡出（可选）
   if (lastLyricIndex >= 0 && lastLyricIndex < lyrics.size() &&
       lyricOpacity < 1.0) {
-    QFont lyricFont("Microsoft YaHei", overlayFontSize, QFont::Bold); // 使用统一字号
+    QFont lyricFont("Microsoft YaHei", overlayFontSize - 2, QFont::Bold); // 使用统一字号
     p.setFont(lyricFont);
 
     QString lyricText = lyrics[lastLyricIndex].text;
