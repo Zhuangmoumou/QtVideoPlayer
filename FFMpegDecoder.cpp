@@ -65,11 +65,15 @@ bool FFMpegDecoder::isPaused() const { return m_pause; }
 // 拆分后的视频解码循环
 void FFMpegDecoder::videoDecodeLoop() {
   AVFormatContext *fmt_ctx = nullptr;
-  if (avformat_open_input(&fmt_ctx, m_path.toUtf8().constData(), nullptr,
-                          nullptr) < 0) {
+  AVDictionary *opts = nullptr;
+  av_dict_set(&opts, "probe_size", "1048576", 0); // 1MB
+  av_dict_set(&opts, "analyzeduration", "1000000", 0); // 1秒
+  if (avformat_open_input(&fmt_ctx, m_path.toUtf8().constData(), nullptr, &opts) < 0) {
     qWarning() << "Failed to open input file:" << m_path;
+    av_dict_free(&opts);
     return;
   }
+  av_dict_free(&opts);
   if (avformat_find_stream_info(fmt_ctx, nullptr) < 0) {
     qWarning() << "Failed to get stream info";
     avformat_close_input(&fmt_ctx);
@@ -310,11 +314,15 @@ void FFMpegDecoder::videoDecodeLoop() {
 // 拆分后的音频解码循环
 void FFMpegDecoder::audioDecodeLoop() {
   AVFormatContext *fmt_ctx = nullptr;
-  if (avformat_open_input(&fmt_ctx, m_path.toUtf8().constData(), nullptr,
-                          nullptr) < 0) {
+  AVDictionary *opts = nullptr;
+  av_dict_set(&opts, "probe_size", "1048576", 0); // 1MB
+  av_dict_set(&opts, "analyzeduration", "1000000", 0); // 1秒
+  if (avformat_open_input(&fmt_ctx, m_path.toUtf8().constData(), nullptr, &opts) < 0) {
     qWarning() << "Failed to open input file:" << m_path;
+    av_dict_free(&opts);
     return;
   }
+  av_dict_free(&opts);
   if (avformat_find_stream_info(fmt_ctx, nullptr) < 0) {
     qWarning() << "Failed to get stream info";
     avformat_close_input(&fmt_ctx);
