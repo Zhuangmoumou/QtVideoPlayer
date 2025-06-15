@@ -484,19 +484,54 @@ void FFMpegDecoder::audioDecodeLoop() {
       m_audioClockMs.store(ms);
 
       // ----------- 修正同步基准 begin -----------
+      // 音频同步相关变量
+      static double audio_drift_threshold = 0.005;    // 允许的音频漂移阈值
+      static double audio_diff_avg_coef = 0.98;      // 音频差异平均系数
+      static double audio_diff_threshold = 0.03;     // 音频差异阈值 
+      static double audio_diff_avg = 0.0;           // 平均音频差异
+
+      // 修改音频同步逻辑
       if (first_audio_frame) {
-        audio_playback_start_time = clock::now();
-        first_audio_pts = ms;
-        first_audio_frame = false;
+          audio_playback_start_time = clock::now();
+          first_audio_pts = ms;
+          first_audio_frame = false;
       } else {
-        int64_t elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                              clock::now() - audio_playback_start_time)
-                              .count();
-        int64_t diff = (ms - first_audio_pts) - elapsed;
-        // 限制最大 sleep 避免卡顿
-        if (diff > 0 && diff < 100) {
-          std::this_thread::sleep_for(std::chrono::milliseconds(diff));
-        }
+          int64_t elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+              clock::now() - audio_playback_start_time).count();
+
+          // 计算实际差异（毫秒）
+          double diff = (ms - first_audio_pts) - elapsed;
+
+          // 更新平均差异
+          if (std::abs(diff) < 500) {  // 降低异常值过滤阈值
+              audio_diff_avg = audio_diff_avg * audio_diff_avg_coef + 
+                           diff * (1.0 - audio_diff_avg_coef);
+          }
+
+          // 更严格的自适应阈值调整
+          double sync_threshold = std::max(5.0, std::min(audio_diff_threshold * elapsed * 0.001, 30.0));
+
+          // 基于平均差异和阈值的平滑同步
+          if (std::abs(diff) > sync_threshold) {
+              if (diff > 0) {
+                  // 播放过快，需要减速
+                  double delay = std::min(diff * 0.85, 40.0);  // 增加减速系数，降低最大延迟
+                  std::this_thread::sleep_for(std::chrono::milliseconds(static_cast<int>(delay)));
+              } else {
+                  // 播放过慢，轻微跳过
+                  if (diff < -200) {  // 提高跳帧门限
+                      continue;
+                  }
+              }
+          }
+
+          // 时钟漂移补偿
+          if (std::abs(audio_diff_avg) > audio_drift_threshold) {
+              // 增加时钟调整强度
+              auto adjustment = std::chrono::milliseconds(static_cast<int>(audio_diff_avg * 0.6));
+              audio_playback_start_time += adjustment;
+              audio_diff_avg *= 0.3;  // 保留一部分历史差异
+          }
       }
       // ----------- 修正同步基准 end -------------
 
