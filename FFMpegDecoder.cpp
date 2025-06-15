@@ -1,4 +1,5 @@
 #include "FFMpegDecoder.h"
+#include "qdebug.h"
 #include <QtDebug>
 #include <chrono>
 
@@ -386,14 +387,11 @@ void FFMpegDecoder::audioDecodeLoop() {
       swr_alloc_set_opts(nullptr, av_get_default_channel_layout(OUT_CHANNELS),
                          OUT_SAMPLE_FMT, OUT_SAMPLE_RATE, actx->channel_layout,
                          actx->sample_fmt, actx->sample_rate, 0, nullptr);
-  if (!swr_ctx) {
-    qWarning() << "Failed to allocate audio resample context";
-  } else {
-    if (swr_init(swr_ctx) < 0) {
+  if (!swr_ctx || swr_init(swr_ctx) < 0) {
       qWarning() << "Failed to initialize audio resample context";
       swr_free(&swr_ctx);
-      swr_ctx = nullptr;
-    }
+      avformat_close_input(&fmt_ctx);
+      return;
   }
 
   AVPacket *pkt = av_packet_alloc();
