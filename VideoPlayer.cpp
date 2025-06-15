@@ -17,6 +17,7 @@
 #include <taglib/tag.h>
 #include <taglib/unsynchronizedlyricsframe.h>
 #include <taglib/xiphcomment.h>
+#include <taglib/mpegfile.h>
 #include <ass/ass.h>
 #include <QProcess> // 新增
 
@@ -147,7 +148,7 @@ void VideoPlayer::play(const QString &path) {
   // 启动音频输出
   QProcess::execute("ubus", QStringList() << "call" << "eq_drc_process.output.rpc" << "control" << R"({"action":"Open"})");
 
-  loadCoverAndLyrics(path);
+  loadLyrics(path);
   currentLyricIndex = 0; // 播放新文件时重置歌词下标
 
   // 新增：加载同名 ass 字幕（优先于 srt）
@@ -225,26 +226,21 @@ void VideoPlayer::play(const QString &path) {
   subtitleCheckTimer->start();
 }
 
-void VideoPlayer::loadCoverAndLyrics(const QString &path) {
+void VideoPlayer::loadLyrics(const QString &path) {
   lyrics.clear();
-  coverArt = QPixmap();
   bool embeddedLyricLoaded = false;
-  QString suffix = QFileInfo(path).suffix().toLower();
 
-  if (suffix == "mp3") {
+  QFile file(path);
+  if (!file.open(QIODevice::ReadOnly))
+    return;
+  QByteArray header = file.peek(16);
+  file.close();
+
+  if (header.startsWith("ID3") || header.mid(0,2) == QByteArray::fromHex("FFFB")) {
     // MP3: TagLib 读取封面和内嵌歌词
-    TagLib::FileRef f(path.toUtf8().constData());
-    if (!f.isNull() && f.tag()) {
-      auto *id3 = dynamic_cast<TagLib::ID3v2::Tag *>(f.file()->tag());
-      if (id3) {
-        // 读取封面
-        auto frames = id3->frameListMap()["APIC"];
-        if (!frames.isEmpty()) {
-          auto pic = static_cast<TagLib::ID3v2::AttachedPictureFrame *>(
-              frames.front());
-          coverArt.loadFromData((const uchar *)pic->picture().data(),
-                                pic->picture().size());
-        }
+    TagLib::MPEG::File mp3File(path.toUtf8().constData());
+    if (mp3File.isValid() && mp3File.ID3v2Tag()) {
+      auto *id3 = mp3File.ID3v2Tag();
         // 读取内嵌歌词（USLT 帧）
         auto usltFrames = id3->frameListMap()["USLT"];
         if (!usltFrames.isEmpty()) {
@@ -299,14 +295,12 @@ void VideoPlayer::loadCoverAndLyrics(const QString &path) {
         }
       }
     }
-  } else if (suffix == "flac") {
+    if (header.startsWith("fLaC")) {
     // FLAC: TagLib 读取 Vorbis Comment 的 LYRICS 字段
-    TagLib::FileRef f(path.toUtf8().constData());
-    if (!f.isNull() && f.file()) {
-      auto *flacFile = dynamic_cast<TagLib::FLAC::File *>(f.file());
-      if (flacFile && flacFile->xiphComment()) {
-        auto *comment = flacFile->xiphComment();
-        if (comment->contains("LYRICS")) {
+    TagLib::FLAC::File flacFile(path.toUtf8().constData());
+    if (flacFile.isValid() && flacFile.xiphComment()) {
+      auto *comment = flacFile.xiphComment();
+      if (comment->contains("LYRICS")) {
           // 修正：先 toString，再转 QString
           QString lyricText = QString::fromUtf8(
               comment->fieldListMap()["LYRICS"].toString().toCString(true));
@@ -348,10 +342,8 @@ void VideoPlayer::loadCoverAndLyrics(const QString &path) {
           }
           embeddedLyricLoaded = !lyrics.isEmpty();
         }
-        // 读取封面（FLAC 封面可选实现，略）
       }
     }
-  }
   // 其他类型或未读取到内嵌歌词，尝试读取同名 .lrc
   if (!embeddedLyricLoaded) {
     QString lrc = QFileInfo(path).absolutePath() + "/" +
@@ -571,13 +563,6 @@ void VideoPlayer::paintEvent(QPaintEvent *) {
     QRect targetRect(QPoint(0, 0), imgSize);
     targetRect.moveCenter(rect().center());
     p.drawImage(targetRect, currentFrame);
-  } else if (!coverArt.isNull()) {
-    // 居中绘制封面
-    int coverW = qMin(width() / 2, 240);
-    int coverH = coverW;
-    int x = (width() - coverW) / 2;
-    int y = (height() - coverH) / 2;
-    p.drawPixmap(x, y, coverW, coverH, coverArt);
   }
 
   // 只在 showOverlayBar 为 true 时绘制媒体信息和进度条

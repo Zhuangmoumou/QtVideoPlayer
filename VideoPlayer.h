@@ -51,8 +51,7 @@ private:
   qint64 duration = 0;
   qint64 currentPts = 0;
 
-  // 专辑封面与歌词
-  QPixmap coverArt;
+  // 歌词
   struct LyricLine {
     qint64 time;
     QString text;
@@ -103,7 +102,7 @@ private:
 
   QTimer *subtitleCheckTimer = nullptr;
 
-  void loadCoverAndLyrics(const QString &path);
+  void loadLyrics(const QString &path);
   void seekByDelta(int dx);
   void showOverlay(bool visible);
 
