@@ -1,25 +1,25 @@
 #include "VideoPlayer.h"
 #include "qdebug.h"
 #include "qglobal.h"
+#include <QCoreApplication>
 #include <QDebug>
 #include <QDir>
 #include <QFile>
 #include <QMediaMetaData>
 #include <QMouseEvent>
-#include <QCoreApplication>
 #include <QPainter>
 #include <QPainterPath>
+#include <QProcess> // 新增
 #include <QTextStream>
+#include <ass/ass.h>
 #include <taglib/attachedpictureframe.h>
 #include <taglib/fileref.h>
 #include <taglib/flacfile.h>
 #include <taglib/id3v2tag.h>
+#include <taglib/mpegfile.h>
 #include <taglib/tag.h>
 #include <taglib/unsynchronizedlyricsframe.h>
 #include <taglib/xiphcomment.h>
-#include <taglib/mpegfile.h>
-#include <ass/ass.h>
-#include <QProcess> // 新增
 
 VideoPlayer::VideoPlayer(QWidget *parent) : QWidget(parent) {
   setAttribute(Qt::WA_AcceptTouchEvents);
@@ -68,7 +68,8 @@ VideoPlayer::VideoPlayer(QWidget *parent) : QWidget(parent) {
   scrollPauseTimer = new QTimer(this);
   scrollPauseTimer->setSingleShot(true);
   connect(scrollTimer, &QTimer::timeout, this, [this]() {
-    if (scrollPause) return;
+    if (scrollPause)
+      return;
     scrollOffset += 2;
     // 需要 infoText 宽度，延后到 paintEvent 处理
     update();
@@ -87,7 +88,8 @@ VideoPlayer::VideoPlayer(QWidget *parent) : QWidget(parent) {
     if (!subtitles.isEmpty()) {
       bool found = false;
       for (int i = 0; i < subtitles.size(); ++i) {
-        if (currentPts >= subtitles[i].startTime && currentPts <= subtitles[i].endTime) {
+        if (currentPts >= subtitles[i].startTime &&
+            currentPts <= subtitles[i].endTime) {
           found = true;
           break;
         }
@@ -113,11 +115,18 @@ VideoPlayer::VideoPlayer(QWidget *parent) : QWidget(parent) {
   QString screenStatusPath = "/tmp/screen_status";
   QString screenStatusDir = QFileInfo(screenStatusPath).absolutePath();
   screenStatusWatcher->addPath(screenStatusDir);
-  connect(screenStatusWatcher, &QFileSystemWatcher::directoryChanged, this, [screenStatusPath]() {
-    if (QFile::exists(screenStatusPath)) {
-      // 屏幕关闭，自动启动音频输出
-      QTimer::singleShot(3000, []() {QProcess::execute("ubus", QStringList() << "call" << "eq_drc_process.output.rpc" << "control" << R"({"action":"Open"})");});}
-  });
+  connect(screenStatusWatcher, &QFileSystemWatcher::directoryChanged, this,
+          [screenStatusPath]() {
+            if (QFile::exists(screenStatusPath)) {
+              // 屏幕关闭，自动启动音频输出
+              QTimer::singleShot(3000, []() {
+                QProcess::execute("ubus",
+                                  QStringList()
+                                      << "call" << "eq_drc_process.output.rpc"
+                                      << "control" << R"({"action":"Open"})");
+              });
+            }
+          });
 }
 
 VideoPlayer::~VideoPlayer() {
@@ -141,12 +150,15 @@ VideoPlayer::~VideoPlayer() {
   }
 
   // 关闭音频输出（使用 startDetached，避免不执行）
-  // QProcess::startDetached("ubus", QStringList() << "call" << "eq_drc_process.output.rpc" << "control" << R"({"action":"Close"})");
+  // QProcess::startDetached("ubus", QStringList() << "call" <<
+  // "eq_drc_process.output.rpc" << "control" << R"({"action":"Close"})");
 }
 
 void VideoPlayer::play(const QString &path) {
   // 启动音频输出
-  QProcess::execute("ubus", QStringList() << "call" << "eq_drc_process.output.rpc" << "control" << R"({"action":"Open"})");
+  QProcess::execute("ubus", QStringList()
+                                << "call" << "eq_drc_process.output.rpc"
+                                << "control" << R"({"action":"Open"})");
 
   loadLyrics(path);
   currentLyricIndex = 0; // 播放新文件时重置歌词下标
@@ -165,10 +177,10 @@ void VideoPlayer::play(const QString &path) {
     loadAssSubtitle(assPath);
   } else {
     // 没有 ass 再尝试 srt
-  QString srtPath = QFileInfo(path).absolutePath() + "/" +
-                    QFileInfo(path).completeBaseName() + ".srt";
-  if (QFile::exists(srtPath)) {
-    loadSrtSubtitle(srtPath);
+    QString srtPath = QFileInfo(path).absolutePath() + "/" +
+                      QFileInfo(path).completeBaseName() + ".srt";
+    if (QFile::exists(srtPath)) {
+      loadSrtSubtitle(srtPath);
     }
   }
 
@@ -236,114 +248,116 @@ void VideoPlayer::loadLyrics(const QString &path) {
   QByteArray header = file.peek(16);
   file.close();
 
-  if (header.startsWith("ID3") || header.mid(0,2) == QByteArray::fromHex("FFFB")) {
+  if (header.startsWith("ID3") ||
+      header.mid(0, 2) == QByteArray::fromHex("FFFB")) {
     // MP3: TagLib 读取封面和内嵌歌词
     TagLib::MPEG::File mp3File(path.toUtf8().constData());
     if (mp3File.isValid() && mp3File.ID3v2Tag()) {
       auto *id3 = mp3File.ID3v2Tag();
-        // 读取内嵌歌词（USLT 帧）
-        auto usltFrames = id3->frameListMap()["USLT"];
-        if (!usltFrames.isEmpty()) {
-          for (auto *frame : usltFrames) {
-            auto *uslt =
-                dynamic_cast<TagLib::ID3v2::UnsynchronizedLyricsFrame *>(frame);
-            if (uslt) {
-              QString lyricText =
-                  QString::fromStdWString(uslt->text().toWString());
-              QRegExp rx("\\[(\\d+):(\\d+\\.\\d+)\\]");
-              QStringList lines = lyricText.split('\n');
-              QMap<qint64, QString> lyricMap;
-              for (const QString &line : lines) {
-                int pos = 0;
-                QList<qint64> times;
-                while ((pos = rx.indexIn(line, pos)) != -1) {
-                  qint64 t = rx.cap(1).toInt() * 60000 +
-                             int(rx.cap(2).toDouble() * 1000);
-                  times.append(t);
-                  pos += rx.matchedLength();
-                }
-                QString text = line;
-                text.remove(QRegExp("(\\[\\d+:\\d+\\.\\d+\\])+"));
-                text = text.trimmed();
-                if (!times.isEmpty() && !text.isEmpty()) {
-                  for (qint64 t : times) {
-                    if (lyricMap.contains(t)) {
-                      lyricMap[t] += "\n" + text;
-                    } else {
-                      lyricMap[t] = text;
-                    }
+      // 读取内嵌歌词（USLT 帧）
+      auto usltFrames = id3->frameListMap()["USLT"];
+      if (!usltFrames.isEmpty()) {
+        for (auto *frame : usltFrames) {
+          auto *uslt =
+              dynamic_cast<TagLib::ID3v2::UnsynchronizedLyricsFrame *>(frame);
+          if (uslt) {
+            QString lyricText =
+                QString::fromStdWString(uslt->text().toWString());
+            QRegExp rx("\\[(\\d+):(\\d+\\.\\d+)\\]");
+            QStringList lines = lyricText.split('\n');
+            QMap<qint64, QString> lyricMap;
+            for (const QString &line : lines) {
+              int pos = 0;
+              QList<qint64> times;
+              while ((pos = rx.indexIn(line, pos)) != -1) {
+                qint64 t = rx.cap(1).toInt() * 60000 +
+                           int(rx.cap(2).toDouble() * 1000);
+                times.append(t);
+                pos += rx.matchedLength();
+              }
+              QString text = line;
+              text.remove(QRegExp("(\\[\\d+:\\d+\\.\\d+\\])+"));
+              text = text.trimmed();
+              if (!times.isEmpty() && !text.isEmpty()) {
+                for (qint64 t : times) {
+                  if (lyricMap.contains(t)) {
+                    lyricMap[t] += "\n" + text;
+                  } else {
+                    lyricMap[t] = text;
                   }
                 }
               }
-              if (lyricMap.isEmpty() && !lyricText.trimmed().isEmpty()) {
-                lyrics.append({0, lyricText.trimmed()});
-              } else {
-                for (auto it = lyricMap.constBegin(); it != lyricMap.constEnd();
-                     ++it) {
-                  lyrics.append({it.key(), it.value()});
-                }
-                std::sort(lyrics.begin(), lyrics.end(),
-                          [](const LyricLine &a, const LyricLine &b) {
-                            return a.time < b.time;
-                          });
-              }
-              embeddedLyricLoaded = !lyrics.isEmpty();
-              if (embeddedLyricLoaded)
-                break;
             }
+            if (lyricMap.isEmpty() && !lyricText.trimmed().isEmpty()) {
+              lyrics.append({0, lyricText.trimmed()});
+            } else {
+              for (auto it = lyricMap.constBegin(); it != lyricMap.constEnd();
+                   ++it) {
+                lyrics.append({it.key(), it.value()});
+              }
+              std::sort(lyrics.begin(), lyrics.end(),
+                        [](const LyricLine &a, const LyricLine &b) {
+                          return a.time < b.time;
+                        });
+            }
+            embeddedLyricLoaded = !lyrics.isEmpty();
+            if (embeddedLyricLoaded)
+              break;
           }
         }
       }
     }
-    if (header.startsWith("fLaC")) {
+  }
+  if (header.startsWith("fLaC")) {
     // FLAC: TagLib 读取 Vorbis Comment 的 LYRICS 字段
     TagLib::FLAC::File flacFile(path.toUtf8().constData());
     if (flacFile.isValid() && flacFile.xiphComment()) {
       auto *comment = flacFile.xiphComment();
       if (comment->contains("LYRICS")) {
-          // 修正：先 toString，再转 QString
-          QString lyricText = QString::fromUtf8(
-              comment->fieldListMap()["LYRICS"].toString().toCString(true));
-          QRegExp rx("\\[(\\d+):(\\d+\\.\\d+)\\]");
-          QStringList lines = lyricText.split('\n');
-          QMap<qint64, QString> lyricMap;
-          for (const QString &line : lines) {
-            int pos = 0;
-            QList<qint64> times;
-            while ((pos = rx.indexIn(line, pos)) != -1) {
-              qint64 t =
-                  rx.cap(1).toInt() * 60000 + int(rx.cap(2).toDouble() * 1000);
-              times.append(t);
-              pos += rx.matchedLength();
-            }
-            QString text = line;
-            text.remove(QRegExp("(\\[\\d+:\\d+\\.\\d+\\])+"));
-            text = text.trimmed();
-            if (!times.isEmpty() && !text.isEmpty()) {
-              for (qint64 t : times) {
-                if (lyricMap.contains(t)) {
-                  lyricMap[t] += "\n" + text;
-                } else {
-                  lyricMap[t] = text;
-                }
+        // 修正：先 toString，再转 QString
+        QString lyricText = QString::fromUtf8(
+            comment->fieldListMap()["LYRICS"].toString().toCString(true));
+        QRegExp rx("\\[(\\d+):(\\d+\\.\\d+)\\]");
+        QStringList lines = lyricText.split('\n');
+        QMap<qint64, QString> lyricMap;
+        for (const QString &line : lines) {
+          int pos = 0;
+          QList<qint64> times;
+          while ((pos = rx.indexIn(line, pos)) != -1) {
+            qint64 t =
+                rx.cap(1).toInt() * 60000 + int(rx.cap(2).toDouble() * 1000);
+            times.append(t);
+            pos += rx.matchedLength();
+          }
+          QString text = line;
+          text.remove(QRegExp("(\\[\\d+:\\d+\\.\\d+\\])+"));
+          text = text.trimmed();
+          if (!times.isEmpty() && !text.isEmpty()) {
+            for (qint64 t : times) {
+              if (lyricMap.contains(t)) {
+                lyricMap[t] += "\n" + text;
+              } else {
+                lyricMap[t] = text;
               }
             }
           }
-          if (lyricMap.isEmpty() && !lyricText.trimmed().isEmpty()) {
-            lyrics.append({0, lyricText.trimmed()});
-          } else {
-            for (auto it = lyricMap.constBegin(); it != lyricMap.constEnd(); ++it) {
-              lyrics.append({it.key(), it.value()});
-            }
-            std::sort(lyrics.begin(), lyrics.end(),
-                      [](const LyricLine &a, const LyricLine &b) {
-                        return a.time < b.time;
-                      });
-          }
-          embeddedLyricLoaded = !lyrics.isEmpty();
         }
+        if (lyricMap.isEmpty() && !lyricText.trimmed().isEmpty()) {
+          lyrics.append({0, lyricText.trimmed()});
+        } else {
+          for (auto it = lyricMap.constBegin(); it != lyricMap.constEnd();
+               ++it) {
+            lyrics.append({it.key(), it.value()});
+          }
+          std::sort(lyrics.begin(), lyrics.end(),
+                    [](const LyricLine &a, const LyricLine &b) {
+                      return a.time < b.time;
+                    });
+        }
+        embeddedLyricLoaded = !lyrics.isEmpty();
       }
     }
+  }
   // 其他类型或未读取到内嵌歌词，尝试读取同名 .lrc
   if (!embeddedLyricLoaded) {
     QString lrc = QFileInfo(path).absolutePath() + "/" +
@@ -516,9 +530,7 @@ void VideoPlayer::mouseReleaseEvent(QMouseEvent *) {
 }
 
 // 改为双击关闭窗口
-void VideoPlayer::mouseDoubleClickEvent(QMouseEvent *) {
-  close();
-}
+void VideoPlayer::mouseDoubleClickEvent(QMouseEvent *) { close(); }
 
 void VideoPlayer::mouseMoveEvent(QMouseEvent *e) {
   if (!pressed)
@@ -569,7 +581,8 @@ void VideoPlayer::paintEvent(QPaintEvent *) {
   if (showOverlayBar) {
     // 左上角视频信息标签
     if (!videoInfoLabel.isEmpty() || !currentFileName.isEmpty()) {
-      QFont infoFont("Microsoft YaHei", overlayFontSize, QFont::Bold); // 使用统一字号
+      QFont infoFont("Microsoft YaHei", overlayFontSize,
+                     QFont::Bold); // 使用统一字号
       p.setFont(infoFont);
       p.setPen(Qt::white);
       QRect infoRect = QRect(10, 10, width() / 1.5, 22);
@@ -627,7 +640,8 @@ void VideoPlayer::paintEvent(QPaintEvent *) {
     // 阴影
     {
       QPainterPath shadowPath;
-      shadowPath.addRoundedRect(bar.adjusted(-2, 2, 2, 6), radius + 2, radius + 2);
+      shadowPath.addRoundedRect(bar.adjusted(-2, 2, 2, 6), radius + 2,
+                                radius + 2);
       QColor shadowColor(0, 0, 0, 80);
       p.save();
       p.setPen(Qt::NoPen);
@@ -644,7 +658,8 @@ void VideoPlayer::paintEvent(QPaintEvent *) {
     // 已播放部分
     int playedWidth = int(bar.width() * pct);
     if (playedWidth > 0) {
-      QRect playedRect = QRect(bar.left(), bar.top(), playedWidth, bar.height());
+      QRect playedRect =
+          QRect(bar.left(), bar.top(), playedWidth, bar.height());
       p.setBrush(Qt::white);
       p.drawRoundedRect(playedRect, radius, radius);
       // 修正：如果已播放部分比半径宽度小，避免圆角溢出
@@ -727,7 +742,8 @@ void VideoPlayer::paintEvent(QPaintEvent *) {
       }
 
       if (opacity > 0.01) {
-        QFont subFont("Microsoft YaHei", overlayFontSize-2, QFont::Bold); // 使用统一字号
+        QFont subFont("Microsoft YaHei", overlayFontSize - 2,
+                      QFont::Bold); // 使用统一字号
         p.setFont(subFont);
 
         QRect textRect = p.fontMetrics().boundingRect(
@@ -769,7 +785,8 @@ void VideoPlayer::paintEvent(QPaintEvent *) {
   }
   // 当前歌词
   if (currentLyricIndex < lyrics.size()) {
-    QFont lyricFont("Microsoft YaHei", overlayFontSize-2, QFont::Bold); // 使用统一字号
+    QFont lyricFont("Microsoft YaHei", overlayFontSize - 2,
+                    QFont::Bold); // 使用统一字号
     p.setFont(lyricFont);
 
     // Youtube 风格：黑色半透明背景，白色文字
@@ -798,7 +815,8 @@ void VideoPlayer::paintEvent(QPaintEvent *) {
   // 上一行歌词淡出（可选）
   if (lastLyricIndex >= 0 && lastLyricIndex < lyrics.size() &&
       lyricOpacity < 1.0) {
-    QFont lyricFont("Microsoft YaHei", overlayFontSize - 2, QFont::Bold); // 使用统一字号
+    QFont lyricFont("Microsoft YaHei", overlayFontSize - 2,
+                    QFont::Bold); // 使用统一字号
     p.setFont(lyricFont);
 
     QString lyricText = lyrics[lastLyricIndex].text;
@@ -831,11 +849,14 @@ void VideoPlayer::paintEvent(QPaintEvent *) {
     long long now = currentPts;
     // 如果 currentPts 单位为微秒，需改为：long long now = currentPts / 1000;
     int detectChange = 0;
-    ASS_Image *img = ass_render_frame(assRenderer, assTrack, now, &detectChange);
+    ASS_Image *img =
+        ass_render_frame(assRenderer, assTrack, now, &detectChange);
     for (; img; img = img->next) {
-      QImage qimg((const uchar *)img->bitmap, img->w, img->h, img->stride, QImage::Format_Alpha8);
+      QImage qimg((const uchar *)img->bitmap, img->w, img->h, img->stride,
+                  QImage::Format_Alpha8);
       QColor color;
-      color.setRgba(qRgba((img->color >> 24) & 0xFF, (img->color >> 16) & 0xFF, (img->color >> 8) & 0xFF, 255 - (img->color & 0xFF)));
+      color.setRgba(qRgba((img->color >> 24) & 0xFF, (img->color >> 16) & 0xFF,
+                          (img->color >> 8) & 0xFF, 255 - (img->color & 0xFF)));
       QImage colored(qimg.size(), QImage::Format_ARGB32_Premultiplied);
       colored.fill(Qt::transparent);
       QPainter qp(&colored);
