@@ -105,6 +105,17 @@ private:
   void loadLyrics(const QString &path);
   void seekByDelta(int dx);
   void showOverlay(bool visible);
+  
+  // 补充缺少的函数声明
+  void parseLyrics(const QString &lyricText, const QRegExp &rx);
+  void updateLyricsIndex(qint64 pts);
+  void updateSubtitleIndex(qint64 pts);
+  void drawOverlayBar(QPainter &p);
+  void drawProgressBar(QPainter &p);
+  void drawSubtitlesAndLyrics(QPainter &p);
+  void drawSrtSubtitles(QPainter &p, const QRect &lyricRect);
+  void drawLyrics(QPainter &p, const QRect &lyricRect);
+  void drawAssSubtitles(QPainter &p);
 
   QFileSystemWatcher *screenStatusWatcher;
 };
