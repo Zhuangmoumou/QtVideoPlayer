@@ -34,15 +34,18 @@ VideoPlayer::VideoPlayer(QWidget *parent) : QWidget(parent) {
   format.setByteOrder(QAudioFormat::LittleEndian);
   format.setSampleType(QAudioFormat::SignedInt);
 
-  audioOutput = new QAudioOutput(QAudioDeviceInfo::defaultOutputDevice(), format);
+  audioOutput =
+      new QAudioOutput(QAudioDeviceInfo::defaultOutputDevice(), format);
   audioIO = audioOutput->start();
 
   // Decoder
   decoder = new FFMpegDecoder(this);
   connect(decoder, &FFMpegDecoder::frameReady, this, &VideoPlayer::onFrame);
   connect(decoder, &FFMpegDecoder::audioReady, this, &VideoPlayer::onAudioData);
-  connect(decoder, &FFMpegDecoder::durationChanged, this, [&](qint64 d) { duration = d; });
-  connect(decoder, &FFMpegDecoder::positionChanged, this, &VideoPlayer::onPositionChanged);
+  connect(decoder, &FFMpegDecoder::durationChanged, this,
+          [&](qint64 d) { duration = d; });
+  connect(decoder, &FFMpegDecoder::positionChanged, this,
+          &VideoPlayer::onPositionChanged);
 
   // Overlay 更新
   overlayTimer = new QTimer(this);
@@ -83,8 +86,9 @@ VideoPlayer::VideoPlayer(QWidget *parent) : QWidget(parent) {
   connect(subtitleCheckTimer, &QTimer::timeout, this, [this]() {
     if (!subtitles.isEmpty()) {
       bool found = false;
-      for (const auto& subtitle : subtitles) {
-        if (currentPts >= subtitle.startTime && currentPts <= subtitle.endTime) {
+      for (const auto &subtitle : subtitles) {
+        if (currentPts >= subtitle.startTime &&
+            currentPts <= subtitle.endTime) {
           found = true;
           break;
         }
@@ -112,15 +116,18 @@ VideoPlayer::VideoPlayer(QWidget *parent) : QWidget(parent) {
   QString screenStatusPath = "/tmp/screen_status";
   QString screenStatusDir = QFileInfo(screenStatusPath).absolutePath();
   screenStatusWatcher->addPath(screenStatusDir);
-  connect(screenStatusWatcher, &QFileSystemWatcher::directoryChanged, this, [screenStatusPath]() {
-    if (QFile::exists(screenStatusPath)) {
-      QTimer::singleShot(3000, []() {
-        QProcess::execute("ubus", QStringList() << "call" << "eq_drc_process.output.rpc" << "control" << R"({"action":"Open"})");
-      });
-    }
-  });
+  connect(screenStatusWatcher, &QFileSystemWatcher::directoryChanged, this,
+          [screenStatusPath]() {
+            if (QFile::exists(screenStatusPath)) {
+              QTimer::singleShot(3000, []() {
+                QProcess::execute("ubus",
+                                  QStringList()
+                                      << "call" << "eq_drc_process.output.rpc"
+                                      << "control" << R"({"action":"Open"})");
+              });
+            }
+          });
 }
-
 
 VideoPlayer::~VideoPlayer() {
   decoder->stop();
@@ -165,7 +172,8 @@ void VideoPlayer::play(const QString &path) {
     assTrack = nullptr;
   }
 
-  QString basePath = QFileInfo(path).absolutePath() + "/" + QFileInfo(path).completeBaseName();
+  QString basePath =
+      QFileInfo(path).absolutePath() + "/" + QFileInfo(path).completeBaseName();
   QString assPath = basePath + ".ass";
   QString srtPath = basePath + ".srt";
   QString subtitlePath;
@@ -188,7 +196,8 @@ void VideoPlayer::play(const QString &path) {
   // 读取视频/音频信息
   videoInfoLabel.clear();
   AVFormatContext *fmt_ctx = nullptr;
-  if (avformat_open_input(&fmt_ctx, path.toUtf8().constData(), nullptr, nullptr) == 0) {
+  if (avformat_open_input(&fmt_ctx, path.toUtf8().constData(), nullptr,
+                          nullptr) == 0) {
     if (avformat_find_stream_info(fmt_ctx, nullptr) >= 0) {
       int vid_idx = -1, aid_idx = -1;
       for (unsigned i = 0; i < fmt_ctx->nb_streams; i++) {
@@ -200,17 +209,22 @@ void VideoPlayer::play(const QString &path) {
       }
       if (vid_idx >= 0) {
         AVCodecParameters *vpar = fmt_ctx->streams[vid_idx]->codecpar;
-        videoInfoLabel += QString("视频: %1x%2  ").arg(vpar->width).arg(vpar->height);
+        videoInfoLabel +=
+            QString("视频: %1x%2  ").arg(vpar->width).arg(vpar->height);
       }
       if (aid_idx >= 0) {
         AVCodecParameters *apar = fmt_ctx->streams[aid_idx]->codecpar;
-        videoInfoLabel += QString("音频: %1Hz %2ch  ").arg(apar->sample_rate).arg(apar->channels);
+        videoInfoLabel += QString("音频: %1Hz %2ch  ")
+                              .arg(apar->sample_rate)
+                              .arg(apar->channels);
       }
       if (fmt_ctx->duration > 0) {
         int sec = fmt_ctx->duration / AV_TIME_BASE;
         int min = sec / 60;
         sec = sec % 60;
-        videoInfoLabel += QString("时长: %1:%2  ").arg(min, 2, 10, QChar('0')).arg(sec, 2, 10, QChar('0'));
+        videoInfoLabel += QString("时长: %1:%2  ")
+                              .arg(min, 2, 10, QChar('0'))
+                              .arg(sec, 2, 10, QChar('0'));
       }
     }
     avformat_close_input(&fmt_ctx);
@@ -247,16 +261,19 @@ void VideoPlayer::loadLyrics(const QString &path) {
   QRegExp rx("\\[(\\d+):(\\d+\\.\\d+)\\]");
   rx.setPatternSyntax(QRegExp::RegExp2); // 预编译正则表达式
 
-  if (header.startsWith("ID3") || header.mid(0, 2) == QByteArray::fromHex("FFFB")) {
+  if (header.startsWith("ID3") ||
+      header.mid(0, 2) == QByteArray::fromHex("FFFB")) {
     TagLib::MPEG::File mp3File(path.toUtf8().constData());
     if (mp3File.isValid() && mp3File.ID3v2Tag()) {
       auto *id3 = mp3File.ID3v2Tag();
       auto usltFrames = id3->frameListMap()["USLT"];
       if (!usltFrames.isEmpty()) {
         for (auto *frame : usltFrames) {
-          auto *uslt = dynamic_cast<TagLib::ID3v2::UnsynchronizedLyricsFrame *>(frame);
+          auto *uslt =
+              dynamic_cast<TagLib::ID3v2::UnsynchronizedLyricsFrame *>(frame);
           if (uslt) {
-            QString lyricText = QString::fromStdWString(uslt->text().toWString());
+            QString lyricText =
+                QString::fromStdWString(uslt->text().toWString());
             parseLyrics(lyricText, rx);
             embeddedLyricLoaded = !lyrics.isEmpty();
             if (embeddedLyricLoaded)
@@ -320,12 +337,10 @@ void VideoPlayer::parseLyrics(const QString &lyricText, const QRegExp &rx) {
   for (auto it = lyricMap.constBegin(); it != lyricMap.constEnd(); ++it) {
     lyrics.append({it.key(), it.value()});
   }
-  std::sort(lyrics.begin(), lyrics.end(),
-            [](const LyricLine &a, const LyricLine &b) {
-              return a.time < b.time;
-            });
+  std::sort(
+      lyrics.begin(), lyrics.end(),
+      [](const LyricLine &a, const LyricLine &b) { return a.time < b.time; });
 }
-
 
 void VideoPlayer::loadSrtSubtitle(const QString &path) {
   subtitles.clear();
@@ -365,7 +380,6 @@ void VideoPlayer::loadSrtSubtitle(const QString &path) {
     subtitles.append({start, end, text, ""});
   }
 }
-
 
 void VideoPlayer::loadAssSubtitle(const QString &path) {
   hasAssSubtitle = false;
@@ -428,7 +442,8 @@ void VideoPlayer::updateLyricsIndex(qint64 pts) {
 void VideoPlayer::updateSubtitleIndex(qint64 pts) {
   int subIdx = currentSubtitleIndex;
   if (subIdx + 1 < subtitles.size() && pts >= subtitles[subIdx + 1].startTime) {
-    while (subIdx + 1 < subtitles.size() && pts >= subtitles[subIdx + 1].startTime) {
+    while (subIdx + 1 < subtitles.size() &&
+           pts >= subtitles[subIdx + 1].startTime) {
       subIdx++;
     }
   } else if (subIdx > 0 && pts < subtitles[subIdx].startTime) {
@@ -442,7 +457,6 @@ void VideoPlayer::updateSubtitleIndex(qint64 pts) {
     update();
   }
 }
-
 
 void VideoPlayer::mousePressEvent(QMouseEvent *e) {
   pressed = true;
@@ -490,7 +504,6 @@ void VideoPlayer::mouseMoveEvent(QMouseEvent *e) {
   showOverlayBar = true;
   update();
 }
-
 
 void VideoPlayer::seekByDelta(int dx) {
   // 动态调整每像素对应的毫秒数，随视频时长自适应
@@ -626,94 +639,94 @@ void VideoPlayer::drawSubtitlesAndLyrics(QPainter &p) {
 }
 
 void VideoPlayer::drawSrtSubtitles(QPainter &p, const QRect &lyricRect) {
-    // 渐变动画（出现和消失）
-    static int lastSubIdx = -2;
-    static QElapsedTimer subFadeTimer;
-    static bool fadingOut = false;
-    static qreal fadeOpacity = 1.0;
-    static QString lastSubText;
-    qreal opacity = 1.0;
-    QString subText;
+  // 渐变动画（出现和消失）
+  static int lastSubIdx = -2;
+  static QElapsedTimer subFadeTimer;
+  static bool fadingOut = false;
+  static qreal fadeOpacity = 1.0;
+  static QString lastSubText;
+  qreal opacity = 1.0;
+  QString subText;
 
-    if (currentSubtitleIndex >= 0 && currentSubtitleIndex < subtitles.size()) {
-      subText = subtitles[currentSubtitleIndex].text;
-      if (lastSubIdx != currentSubtitleIndex) {
-        // 字幕切换，启动淡入
-        subFadeTimer.restart();
-        fadingOut = false;
-        lastSubIdx = currentSubtitleIndex;
-        fadeOpacity = 1.0;
-        lastSubText = subText;
+  if (currentSubtitleIndex >= 0 && currentSubtitleIndex < subtitles.size()) {
+    subText = subtitles[currentSubtitleIndex].text;
+    if (lastSubIdx != currentSubtitleIndex) {
+      // 字幕切换，启动淡入
+      subFadeTimer.restart();
+      fadingOut = false;
+      lastSubIdx = currentSubtitleIndex;
+      fadeOpacity = 1.0;
+      lastSubText = subText;
+    }
+  } else {
+    // 字幕消失，启动淡出
+    if (!fadingOut && lastSubIdx != -1) {
+      subFadeTimer.restart();
+      fadingOut = true;
+      fadeOpacity = 1.0;
+    }
+    subText = lastSubText;
+  }
+
+  if (!subText.isEmpty()) {
+    if (!fadingOut) {
+      // 淡入
+      if (subFadeTimer.isValid()) {
+        qint64 elapsed = subFadeTimer.elapsed();
+        if (elapsed < 400) {
+          opacity = qMin(1.0, elapsed / 400.0);
+          QTimer::singleShot(16, this, [this] { update(); });
+        } else {
+          opacity = 1.0;
+        }
       }
+      fadeOpacity = opacity;
     } else {
-      // 字幕消失，启动淡出
-      if (!fadingOut && lastSubIdx != -1) {
-        subFadeTimer.restart();
-        fadingOut = true;
-        fadeOpacity = 1.0;
-      }
-      subText = lastSubText;
-    }
-
-    if (!subText.isEmpty()) {
-      if (!fadingOut) {
-        // 淡入
-        if (subFadeTimer.isValid()) {
-          qint64 elapsed = subFadeTimer.elapsed();
-          if (elapsed < 400) {
-            opacity = qMin(1.0, elapsed / 400.0);
-            QTimer::singleShot(16, this, [this] { update(); });
-          } else {
-            opacity = 1.0;
-          }
-        }
-        fadeOpacity = opacity;
-      } else {
-        // 淡出
-        if (subFadeTimer.isValid()) {
-          qint64 elapsed = subFadeTimer.elapsed();
-          if (elapsed < 400) {
-            opacity = fadeOpacity * (1.0 - elapsed / 400.0);
-            QTimer::singleShot(16, this, [this] { update(); });
-          } else {
-            opacity = 0.0;
-            fadingOut = false;
-            lastSubIdx = -1;
-            lastSubText.clear();
-          }
+      // 淡出
+      if (subFadeTimer.isValid()) {
+        qint64 elapsed = subFadeTimer.elapsed();
+        if (elapsed < 400) {
+          opacity = fadeOpacity * (1.0 - elapsed / 400.0);
+          QTimer::singleShot(16, this, [this] { update(); });
+        } else {
+          opacity = 0.0;
+          fadingOut = false;
+          lastSubIdx = -1;
+          lastSubText.clear();
         }
       }
-
-      if (opacity > 0.01) {
-        QFont subFont("Microsoft YaHei", overlayFontSize - 2,
-                      QFont::Bold); // 使用统一字号
-        p.setFont(subFont);
-
-        QRect textRect = p.fontMetrics().boundingRect(
-            lyricRect, Qt::AlignHCenter | Qt::AlignVCenter, subText);
-        textRect = textRect.marginsAdded(QMargins(10, 8, 10, 8));
-        textRect.moveCenter(lyricRect.center());
-
-        // 半透明黑色背景
-        p.save();
-        p.setRenderHint(QPainter::Antialiasing, true);
-        QColor bgColor(0, 0, 0, int(180 * opacity));
-        p.setPen(Qt::NoPen);
-        p.setBrush(bgColor);
-        p.drawRoundedRect(textRect, 12, 12);
-        p.restore();
-
-        // 白色文字
-        p.save();
-        QColor textColor(255, 255, 255, int(255 * opacity));
-        p.setPen(textColor);
-        p.drawText(textRect, Qt::AlignHCenter | Qt::AlignVCenter, subText);
-        p.restore();
-      }
-      // SRT 绘制后直接 return，避免歌词和字幕重叠
-      if (opacity > 0.01)
-        return;
     }
+
+    if (opacity > 0.01) {
+      QFont subFont("Microsoft YaHei", overlayFontSize - 2,
+                    QFont::Bold); // 使用统一字号
+      p.setFont(subFont);
+
+      QRect textRect = p.fontMetrics().boundingRect(
+          lyricRect, Qt::AlignHCenter | Qt::AlignVCenter, subText);
+      textRect = textRect.marginsAdded(QMargins(10, 8, 10, 8));
+      textRect.moveCenter(lyricRect.center());
+
+      // 半透明黑色背景
+      p.save();
+      p.setRenderHint(QPainter::Antialiasing, true);
+      QColor bgColor(0, 0, 0, int(180 * opacity));
+      p.setPen(Qt::NoPen);
+      p.setBrush(bgColor);
+      p.drawRoundedRect(textRect, 12, 12);
+      p.restore();
+
+      // 白色文字
+      p.save();
+      QColor textColor(255, 255, 255, int(255 * opacity));
+      p.setPen(textColor);
+      p.drawText(textRect, Qt::AlignHCenter | Qt::AlignVCenter, subText);
+      p.restore();
+    }
+    // SRT 绘制后直接 return，避免歌词和字幕重叠
+    if (opacity > 0.01)
+      return;
+  }
 }
 
 void VideoPlayer::drawLyrics(QPainter &p, const QRect &lyricRect) {
@@ -815,7 +828,6 @@ void VideoPlayer::drawAssSubtitles(QPainter &p) {
   }
 }
 
-
 void VideoPlayer::updateOverlay() {
   // 歌词渐变动画刷新
   if (lyricFadeTimer.isValid()) {
@@ -838,47 +850,49 @@ void VideoPlayer::showOverlayBarForSeconds(int seconds) {
   update();
 }
 
-bool VideoPlayer::findSimilarSubtitle(const QString &videoPath, QString &subtitlePath) {
+bool VideoPlayer::findSimilarSubtitle(const QString &videoPath,
+                                      QString &subtitlePath) {
   // 获取视频文件所在目录
   QFileInfo videoInfo(videoPath);
   QDir dir = videoInfo.absoluteDir();
-  
+
   // 获取视频文件的基本名称（不含扩展名和路径）
   QString baseName = videoInfo.completeBaseName();
-  
+
   // 获取目录中的所有文件
   QFileInfoList fileList = dir.entryInfoList(QDir::Files);
-  
+
   double bestSimilarity = 0.0;
   QString bestMatch;
   const double similarityThreshold = 0.7; // 相似度阈值
-  
+
   // 遍历目录中的所有文件，寻找.ass和.srt文件
   for (const QFileInfo &fileInfo : fileList) {
     QString fileName = fileInfo.fileName();
-    if (fileName.endsWith(".ass", Qt::CaseInsensitive) || 
+    if (fileName.endsWith(".ass", Qt::CaseInsensitive) ||
         fileName.endsWith(".srt", Qt::CaseInsensitive)) {
-      
+
       // 计算字幕文件基本名称（不含扩展名）
       QString subBaseName = fileInfo.completeBaseName();
-      
+
       // 计算相似度 - 使用莱文斯坦距离
       int distance = levenshteinDistance(baseName, subBaseName);
-      double similarity = 1.0 - (double)distance / qMax(baseName.length(), subBaseName.length());
-      
+      double similarity = 1.0 - (double)distance / qMax(baseName.length(),
+                                                        subBaseName.length());
+
       if (similarity > bestSimilarity) {
         bestSimilarity = similarity;
         bestMatch = fileInfo.absoluteFilePath();
       }
     }
   }
-  
-  // 如果找到相似度超过阈值的字幕文件，则返回true
+
+  // 如果找到相似度超过阈值的字幕文件，则返回 true
   if (bestSimilarity >= similarityThreshold) {
     subtitlePath = bestMatch;
     return true;
   }
-  
+
   return false;
 }
 
@@ -886,23 +900,24 @@ bool VideoPlayer::findSimilarSubtitle(const QString &videoPath, QString &subtitl
 int VideoPlayer::levenshteinDistance(const QString &s1, const QString &s2) {
   const int len1 = s1.length();
   const int len2 = s2.length();
-  
+
   QVector<QVector<int>> dp(len1 + 1, QVector<int>(len2 + 1));
-  
+
   for (int i = 0; i <= len1; i++) {
     dp[i][0] = i;
   }
-  
+
   for (int j = 0; j <= len2; j++) {
     dp[0][j] = j;
   }
-  
+
   for (int i = 1; i <= len1; i++) {
     for (int j = 1; j <= len2; j++) {
       int cost = (s1[i - 1] == s2[j - 1]) ? 0 : 1;
-      dp[i][j] = qMin(qMin(dp[i - 1][j] + 1, dp[i][j - 1] + 1), dp[i - 1][j - 1] + cost);
+      dp[i][j] = qMin(qMin(dp[i - 1][j] + 1, dp[i][j - 1] + 1),
+                      dp[i - 1][j - 1] + cost);
     }
   }
-  
+
   return dp[len1][len2];
 }
