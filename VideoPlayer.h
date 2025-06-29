@@ -74,6 +74,10 @@ private:
   int currentSubtitleIndex = -1;
   void loadSrtSubtitle(const QString &path);
   void loadAssSubtitle(const QString &path); // 新增：加载 ass 字幕
+  // 字幕模糊匹配
+  bool findSimilarSubtitle(const QString &videoPath, QString &subtitlePath);
+  // 计算莱文斯坦距离
+  int levenshteinDistance(const QString &s1, const QString &s2);
 
   // libass 相关
   ASS_Library *assLibrary = nullptr;

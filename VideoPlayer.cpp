@@ -156,7 +156,7 @@ void VideoPlayer::play(const QString &path) {
   loadLyrics(path);
   currentLyricIndex = 0; // 播放新文件时重置歌词下标
 
-  // 新增：加载同名 ass 字幕（优先于 srt）
+  // 新增：加载字幕（支持模糊匹配）
   subtitles.clear();
   currentSubtitleIndex = -1;
   hasAssSubtitle = false;
@@ -168,11 +168,21 @@ void VideoPlayer::play(const QString &path) {
   QString basePath = QFileInfo(path).absolutePath() + "/" + QFileInfo(path).completeBaseName();
   QString assPath = basePath + ".ass";
   QString srtPath = basePath + ".srt";
+  QString subtitlePath;
 
+  // 首先尝试精确匹配同名字幕
   if (QFile::exists(assPath)) {
     loadAssSubtitle(assPath);
   } else if (QFile::exists(srtPath)) {
     loadSrtSubtitle(srtPath);
+  }
+  // 如果没有找到精确匹配的字幕，尝试模糊匹配
+  else if (findSimilarSubtitle(path, subtitlePath)) {
+    if (subtitlePath.endsWith(".ass", Qt::CaseInsensitive)) {
+      loadAssSubtitle(subtitlePath);
+    } else if (subtitlePath.endsWith(".srt", Qt::CaseInsensitive)) {
+      loadSrtSubtitle(subtitlePath);
+    }
   }
 
   // 读取视频/音频信息
@@ -826,4 +836,73 @@ void VideoPlayer::showOverlayBarForSeconds(int seconds) {
   showOverlayBar = true;
   overlayBarTimer->start(seconds * 1000);
   update();
+}
+
+bool VideoPlayer::findSimilarSubtitle(const QString &videoPath, QString &subtitlePath) {
+  // 获取视频文件所在目录
+  QFileInfo videoInfo(videoPath);
+  QDir dir = videoInfo.absoluteDir();
+  
+  // 获取视频文件的基本名称（不含扩展名和路径）
+  QString baseName = videoInfo.completeBaseName();
+  
+  // 获取目录中的所有文件
+  QFileInfoList fileList = dir.entryInfoList(QDir::Files);
+  
+  double bestSimilarity = 0.0;
+  QString bestMatch;
+  const double similarityThreshold = 0.7; // 相似度阈值
+  
+  // 遍历目录中的所有文件，寻找.ass和.srt文件
+  for (const QFileInfo &fileInfo : fileList) {
+    QString fileName = fileInfo.fileName();
+    if (fileName.endsWith(".ass", Qt::CaseInsensitive) || 
+        fileName.endsWith(".srt", Qt::CaseInsensitive)) {
+      
+      // 计算字幕文件基本名称（不含扩展名）
+      QString subBaseName = fileInfo.completeBaseName();
+      
+      // 计算相似度 - 使用莱文斯坦距离
+      int distance = levenshteinDistance(baseName, subBaseName);
+      double similarity = 1.0 - (double)distance / qMax(baseName.length(), subBaseName.length());
+      
+      if (similarity > bestSimilarity) {
+        bestSimilarity = similarity;
+        bestMatch = fileInfo.absoluteFilePath();
+      }
+    }
+  }
+  
+  // 如果找到相似度超过阈值的字幕文件，则返回true
+  if (bestSimilarity >= similarityThreshold) {
+    subtitlePath = bestMatch;
+    return true;
+  }
+  
+  return false;
+}
+
+// 计算莱文斯坦距离的辅助函数
+int VideoPlayer::levenshteinDistance(const QString &s1, const QString &s2) {
+  const int len1 = s1.length();
+  const int len2 = s2.length();
+  
+  QVector<QVector<int>> dp(len1 + 1, QVector<int>(len2 + 1));
+  
+  for (int i = 0; i <= len1; i++) {
+    dp[i][0] = i;
+  }
+  
+  for (int j = 0; j <= len2; j++) {
+    dp[0][j] = j;
+  }
+  
+  for (int i = 1; i <= len1; i++) {
+    for (int j = 1; j <= len2; j++) {
+      int cost = (s1[i - 1] == s2[j - 1]) ? 0 : 1;
+      dp[i][j] = qMin(qMin(dp[i - 1][j] + 1, dp[i][j - 1] + 1), dp[i - 1][j - 1] + cost);
+    }
+  }
+  
+  return dp[len1][len2];
 }
