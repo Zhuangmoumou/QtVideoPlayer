@@ -30,7 +30,7 @@ void FFMpegDecoder::start(const QString &path) {
   m_seeking = false;
   m_videoSeekHandled = false; // 新增
   m_audioSeekHandled = false; // 新增
-  m_eof = false; // 新增
+  m_eof = false;              // 新增
 
   m_videoThread = std::thread(&FFMpegDecoder::videoDecodeLoop, this);
   m_audioThread = std::thread(&FFMpegDecoder::audioDecodeLoop, this);
@@ -51,8 +51,8 @@ void FFMpegDecoder::seek(qint64 ms) {
   m_seeking = true;
   m_videoSeekHandled = false; // 新增
   m_audioSeekHandled = false; // 新增
-  m_eof = false; // 新增
-  m_cond.notify_all(); // 唤醒所有线程
+  m_eof = false;              // 新增
+  m_cond.notify_all();        // 唤醒所有线程
 }
 
 void FFMpegDecoder::togglePause() {
@@ -67,9 +67,10 @@ bool FFMpegDecoder::isPaused() const { return m_pause; }
 void FFMpegDecoder::videoDecodeLoop() {
   AVFormatContext *fmt_ctx = nullptr;
   AVDictionary *opts = nullptr;
-  av_dict_set(&opts, "probe_size", "1048576", 0); // 1MB
+  av_dict_set(&opts, "probe_size", "1048576", 0);      // 1MB
   av_dict_set(&opts, "analyzeduration", "1000000", 0); // 1秒
-  if (avformat_open_input(&fmt_ctx, m_path.toUtf8().constData(), nullptr, &opts) < 0) {
+  if (avformat_open_input(&fmt_ctx, m_path.toUtf8().constData(), nullptr,
+                          &opts) < 0) {
     qWarning() << "Failed to open input file:" << m_path;
     av_dict_free(&opts);
     return;
@@ -194,7 +195,7 @@ void FFMpegDecoder::videoDecodeLoop() {
         break;
       if (m_seeking) {
         m_eof = false; // 新增
-        continue; // 继续循环以处理 seek
+        continue;      // 继续循环以处理 seek
       }
       // 若只是 pause，继续等待
       continue;
@@ -237,11 +238,15 @@ void FFMpegDecoder::videoDecodeLoop() {
             diff = ms - audioClock;
           }
           if (diff > 80) {
-            qWarning() << "Drop video frame: video ahead of audio (diff =" << diff << "ms, video ms =" << ms << ", audio ms =" << audioClock << ")";
+            qWarning() << "Drop video frame: video ahead of audio (diff ="
+                       << diff << "ms, video ms =" << ms
+                       << ", audio ms =" << audioClock << ")";
             continue;
           }
         } else if (diff < -300) { // 放宽丢帧阈值
-          qWarning() << "Drop video frame: video lags audio too much (diff =" << diff << "ms, video ms =" << ms << ", audio ms =" << audioClock << ")";
+          qWarning() << "Drop video frame: video lags audio too much (diff ="
+                     << diff << "ms, video ms =" << ms
+                     << ", audio ms =" << audioClock << ")";
           continue;
         }
         // 否则正常显示
@@ -316,9 +321,10 @@ void FFMpegDecoder::videoDecodeLoop() {
 void FFMpegDecoder::audioDecodeLoop() {
   AVFormatContext *fmt_ctx = nullptr;
   AVDictionary *opts = nullptr;
-  av_dict_set(&opts, "probe_size", "1048576", 0); // 1MB
+  av_dict_set(&opts, "probe_size", "1048576", 0);      // 1MB
   av_dict_set(&opts, "analyzeduration", "1000000", 0); // 1秒
-  if (avformat_open_input(&fmt_ctx, m_path.toUtf8().constData(), nullptr, &opts) < 0) {
+  if (avformat_open_input(&fmt_ctx, m_path.toUtf8().constData(), nullptr,
+                          &opts) < 0) {
     qWarning() << "Failed to open input file:" << m_path;
     av_dict_free(&opts);
     return;
@@ -388,10 +394,10 @@ void FFMpegDecoder::audioDecodeLoop() {
                          OUT_SAMPLE_FMT, OUT_SAMPLE_RATE, actx->channel_layout,
                          actx->sample_fmt, actx->sample_rate, 0, nullptr);
   if (!swr_ctx || swr_init(swr_ctx) < 0) {
-      qWarning() << "Failed to initialize audio resample context";
-      swr_free(&swr_ctx);
-      avformat_close_input(&fmt_ctx);
-      return;
+    qWarning() << "Failed to initialize audio resample context";
+    swr_free(&swr_ctx);
+    avformat_close_input(&fmt_ctx);
+    return;
   }
 
   AVPacket *pkt = av_packet_alloc();
@@ -448,7 +454,7 @@ void FFMpegDecoder::audioDecodeLoop() {
         break;
       if (m_seeking) {
         m_eof = false; // 新增
-        continue; // 继续循环以处理 seek
+        continue;      // 继续循环以处理 seek
       }
       // 若只是 pause，继续等待
       continue;
@@ -485,53 +491,58 @@ void FFMpegDecoder::audioDecodeLoop() {
 
       // ----------- 修正同步基准 begin -----------
       // 音频同步相关变量
-      static double audio_drift_threshold = 0.005;    // 允许的音频漂移阈值
-      static double audio_diff_avg_coef = 0.98;      // 音频差异平均系数
-      static double audio_diff_threshold = 0.03;     // 音频差异阈值 
-      static double audio_diff_avg = 0.0;           // 平均音频差异
+      static double audio_drift_threshold = 0.005; // 允许的音频漂移阈值
+      static double audio_diff_avg_coef = 0.98;    // 音频差异平均系数
+      static double audio_diff_threshold = 0.03;   // 音频差异阈值
+      static double audio_diff_avg = 0.0;          // 平均音频差异
 
       // 修改音频同步逻辑
       if (first_audio_frame) {
-          audio_playback_start_time = clock::now();
-          first_audio_pts = ms;
-          first_audio_frame = false;
+        audio_playback_start_time = clock::now();
+        first_audio_pts = ms;
+        first_audio_frame = false;
       } else {
-          int64_t elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-              clock::now() - audio_playback_start_time).count();
+        int64_t elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                              clock::now() - audio_playback_start_time)
+                              .count();
 
-          // 计算实际差异（毫秒）
-          double diff = (ms - first_audio_pts) - elapsed;
+        // 计算实际差异（毫秒）
+        double diff = (ms - first_audio_pts) - elapsed;
 
-          // 更新平均差异
-          if (std::abs(diff) < 500) {  // 降低异常值过滤阈值
-              audio_diff_avg = audio_diff_avg * audio_diff_avg_coef + 
+        // 更新平均差异
+        if (std::abs(diff) < 500) { // 降低异常值过滤阈值
+          audio_diff_avg = audio_diff_avg * audio_diff_avg_coef +
                            diff * (1.0 - audio_diff_avg_coef);
-          }
+        }
 
-          // 更严格的自适应阈值调整
-          double sync_threshold = std::max(5.0, std::min(audio_diff_threshold * elapsed * 0.001, 30.0));
+        // 更严格的自适应阈值调整
+        double sync_threshold = std::max(
+            5.0, std::min(audio_diff_threshold * elapsed * 0.001, 30.0));
 
-          // 基于平均差异和阈值的平滑同步
-          if (std::abs(diff) > sync_threshold) {
-              if (diff > 0) {
-                  // 播放过快，需要减速
-                  double delay = std::min(diff * 0.85, 40.0);  // 增加减速系数，降低最大延迟
-                  std::this_thread::sleep_for(std::chrono::milliseconds(static_cast<int>(delay)));
-              } else {
-                  // 播放过慢，轻微跳过
-                  if (diff < -200) {  // 提高跳帧门限
-                      continue;
-                  }
-              }
+        // 基于平均差异和阈值的平滑同步
+        if (std::abs(diff) > sync_threshold) {
+          if (diff > 0) {
+            // 播放过快，需要减速
+            double delay =
+                std::min(diff * 0.85, 40.0); // 增加减速系数，降低最大延迟
+            std::this_thread::sleep_for(
+                std::chrono::milliseconds(static_cast<int>(delay)));
+          } else {
+            // 播放过慢，轻微跳过
+            if (diff < -200) { // 提高跳帧门限
+              continue;
+            }
           }
+        }
 
-          // 时钟漂移补偿
-          if (std::abs(audio_diff_avg) > audio_drift_threshold) {
-              // 增加时钟调整强度
-              auto adjustment = std::chrono::milliseconds(static_cast<int>(audio_diff_avg * 0.6));
-              audio_playback_start_time += adjustment;
-              audio_diff_avg *= 0.3;  // 保留一部分历史差异
-          }
+        // 时钟漂移补偿
+        if (std::abs(audio_diff_avg) > audio_drift_threshold) {
+          // 增加时钟调整强度
+          auto adjustment =
+              std::chrono::milliseconds(static_cast<int>(audio_diff_avg * 0.6));
+          audio_playback_start_time += adjustment;
+          audio_diff_avg *= 0.3; // 保留一部分历史差异
+        }
       }
       // ----------- 修正同步基准 end -------------
 
