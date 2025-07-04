@@ -221,7 +221,7 @@ void FFMpegDecoder::videoDecodeLoop() {
     if (av_read_frame(fmt_ctx.get(), pkt.get()) < 0) {
       m_eof = true;
       std::unique_lock<std::mutex> lk(m_mutex);
-      m_cond.wait(lk, [&] { return m_stop || m_seeking || m_eof == false; });
+      m_cond.wait_for(lk, std::chrono::milliseconds(30), [&] { return m_stop || m_seeking || m_eof == false; });
       if (m_stop)
         break;
       if (m_seeking) {
@@ -273,6 +273,7 @@ void FFMpegDecoder::videoDecodeLoop() {
           }
           if (diff > frame_interval) {
             qWarning() << "[Sync] Drop video frame: video ahead (diff =" << diff << "ms, video =" << ms << ", audio =" << audioClock << ")";
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
             continue;
           }
         } else if (diff < -frame_interval * 6) { // 允许最大音画滞后
@@ -281,9 +282,19 @@ void FFMpegDecoder::videoDecodeLoop() {
         }
       }
       // 初始化 SwsContext
-      if (!sws_ctx || sws_src_pix_fmt != frame->format) {
+      if (!sws_ctx || sws_src_pix_fmt != frame->format || frame->width != vwidth || frame->height != vheight) {
         if (sws_ctx)
           sws_freeContext(sws_ctx);
+        vwidth = frame->width;
+        vheight = frame->height;
+        rgb_stride = vwidth * 3;
+        int new_buf_size = av_image_get_buffer_size(AV_PIX_FMT_RGB24, vwidth, vheight, 1);
+        if (new_buf_size != rgb_buf_size) {
+          if (rgb_buf)
+            av_free(rgb_buf);
+          rgb_buf = (uint8_t *)av_malloc(new_buf_size);
+          rgb_buf_size = new_buf_size;
+        }
         sws_ctx = sws_getCachedContext(
             nullptr, vwidth, vheight, (AVPixelFormat)frame->format, vwidth,
             vheight, AV_PIX_FMT_RGB24, SWS_FAST_BILINEAR, nullptr, nullptr,
@@ -295,31 +306,17 @@ void FFMpegDecoder::videoDecodeLoop() {
           continue;
         }
       }
-      // 如果视频帧的宽高发生变化，则重新分配 RGB 缓冲区
-      if (frame->width != vwidth || frame->height != vheight) {
-        vwidth = frame->width;
-        vheight = frame->height;
-        rgb_stride = vwidth * 3;
-        int new_buf_size =
-            av_image_get_buffer_size(AV_PIX_FMT_RGB24, vwidth, vheight, 1);
-        if (rgb_buf)
-          av_free(rgb_buf);
-        rgb_buf = (uint8_t *)av_malloc(new_buf_size);
-        rgb_buf_size = new_buf_size;
-      }
       // 转换视频帧格式为 RGB24
       uint8_t *dst[1] = {rgb_buf};
       int dst_linesize[1] = {rgb_stride};
       sws_scale(sws_ctx, frame->data, frame->linesize, 0, vheight, dst,
                 dst_linesize);
-      // 创建 QImage
+      // 只在必要时复制 QImage
       QImage img(rgb_buf, vwidth, vheight, rgb_stride, QImage::Format_RGB888);
       if (img.isNull()) {
-        qWarning()
-            << "QImage isNull after construction, fallback to buffer copy";
-        QByteArray tmp((const char *)rgb_buf, vheight * rgb_stride);
-        QImage img2((const uchar *)tmp.constData(), vwidth, vheight,
-                    QImage::Format_RGB888);
+        qWarning() << "QImage isNull after construction, fallback to buffer copy";
+        QByteArray tmp = QByteArray::fromRawData((const char *)rgb_buf, vheight * rgb_stride);
+        QImage img2((const uchar *)tmp.constData(), vwidth, vheight, QImage::Format_RGB888);
         emit frameReady(img2.copy());
       } else {
         emit frameReady(img.copy());
@@ -330,7 +327,6 @@ void FFMpegDecoder::videoDecodeLoop() {
   }
   if (rgb_buf)
     av_free(rgb_buf);
-  // 已由智能指针管理，无需手动释放 AVFrame/AVPacket
   if (sws_ctx)
     sws_freeContext(sws_ctx);
 }
@@ -503,7 +499,7 @@ void FFMpegDecoder::audioDecodeLoop() {
       }
       int converted = swr_convert(swr_ctx, out_buf, out_nb, (const uint8_t **)frame->data, frame->nb_samples);
       int data_size = av_samples_get_buffer_size(nullptr, OUT_CHANNELS, converted, OUT_SAMPLE_FMT, 1);
-      QByteArray pcm((const char *)out_buf[0], data_size);
+      QByteArray pcm = QByteArray::fromRawData((const char *)out_buf[0], data_size);
       emit audioReady(pcm);
       emit positionChanged(ms);
     }
@@ -515,5 +511,4 @@ void FFMpegDecoder::audioDecodeLoop() {
   }
   if (swr_ctx)
     swr_free(&swr_ctx);
-  // AVFormatContext 已由智能指针管理，无需手动释放
 }
