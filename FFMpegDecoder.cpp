@@ -15,17 +15,23 @@ extern "C" {
 
 namespace {
 // 智能指针管理 AVFrame
-using AVFramePtr = std::unique_ptr<AVFrame, decltype(&av_frame_free)>;
-AVFramePtr make_avframe() { return AVFramePtr(av_frame_alloc(), &av_frame_free); }
-// 智能指针管理 AVPacket
-using AVPacketPtr = std::unique_ptr<AVPacket, decltype(&av_packet_free)>;
-AVPacketPtr make_avpacket() { return AVPacketPtr(av_packet_alloc(), &av_packet_free); }
-// 智能指针管理 AVCodecContext
-using AVCodecContextPtr = std::unique_ptr<AVCodecContext, decltype(&avcodec_free_context)>;
-AVCodecContextPtr make_avcodec_ctx(AVCodec *codec) { return AVCodecContextPtr(avcodec_alloc_context3(codec), &avcodec_free_context); }
-// 智能指针管理 AVFormatContext
-using AVFormatContextPtr = std::unique_ptr<AVFormatContext, decltype(&avformat_close_input)>;
-AVFormatContextPtr make_avformat_ctx(AVFormatContext *ctx) { return AVFormatContextPtr(ctx, &avformat_close_input); }
+template<typename T, void (*FreeFunc)(T**)>
+struct FFmpegDeleter {
+    void operator()(T* ptr) const {
+        if (ptr) {
+            FreeFunc(&ptr);
+        }
+    }
+};
+
+using AVFramePtr = std::unique_ptr<AVFrame, FFmpegDeleter<AVFrame, av_frame_free>>;
+using AVPacketPtr = std::unique_ptr<AVPacket, FFmpegDeleter<AVPacket, av_packet_free>>;
+using AVCodecContextPtr = std::unique_ptr<AVCodecContext, FFmpegDeleter<AVCodecContext, avcodec_free_context>>;
+using AVFormatContextPtr = std::unique_ptr<AVFormatContext, FFmpegDeleter<AVFormatContext, avformat_close_input>>;
+
+AVFramePtr make_avframe() { return AVFramePtr(av_frame_alloc()); }
+AVPacketPtr make_avpacket() { return AVPacketPtr(av_packet_alloc()); }
+AVCodecContextPtr make_avcodec_ctx(AVCodec *codec) { return AVCodecContextPtr(avcodec_alloc_context3(codec)); }
 
 // 查找解码器
 AVCodec *find_decoder(AVCodecID id, AVMediaType type) {
@@ -119,7 +125,7 @@ void FFMpegDecoder::videoDecodeLoop() {
     return;
   }
   av_dict_free(&opts);
-  AVFormatContextPtr fmt_ctx(raw_fmt_ctx, &avformat_close_input);
+  AVFormatContextPtr fmt_ctx(raw_fmt_ctx);
   // 获取流信息
   if (avformat_find_stream_info(fmt_ctx.get(), nullptr) < 0) {
     qWarning() << "Failed to get stream info";
@@ -340,7 +346,7 @@ void FFMpegDecoder::audioDecodeLoop() {
     return;
   }
   av_dict_free(&opts);
-  AVFormatContextPtr fmt_ctx(raw_fmt_ctx, &avformat_close_input);
+  AVFormatContextPtr fmt_ctx(raw_fmt_ctx);
   if (avformat_find_stream_info(fmt_ctx.get(), nullptr) < 0) {
     qWarning() << "Failed to get stream info";
     return;
