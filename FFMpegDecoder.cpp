@@ -238,46 +238,39 @@ void FFMpegDecoder::videoDecodeLoop() {
     avcodec_send_packet(vctx.get(), pkt.get());
     // 接收解码后的视频帧
     while (avcodec_receive_frame(vctx.get(), frame.get()) == 0) {
-      // 跳转时等待
       if (m_seeking)
         break;
-      // 获取视频帧的 PTS
       int64_t pts = frame->best_effort_timestamp;
       if (pts == AV_NOPTS_VALUE)
         pts = frame->pts;
       if (pts == AV_NOPTS_VALUE)
         pts = 0;
-      // 转换 PTS 为毫秒
       int64_t ms = pts * vtime_base.num * 1000LL / vtime_base.den;
-      // 获取音频时钟
       qint64 audioClock = m_audioClockMs.load();
-      // 计算视频和音频的差值
       qint64 diff = ms - audioClock;
-      // 如果音频时钟大于 0，则判断视频和音频的差值
+      // 计算自适应丢帧/等待阈值（如帧间隔的2倍，最小10ms最大80ms）
+      int frame_interval = 40; // 默认25fps
+      if (vctx->framerate.num && vctx->framerate.den) {
+        frame_interval = 1000 * vctx->framerate.den / vctx->framerate.num;
+        frame_interval = std::max(10, std::min(frame_interval, 80));
+      }
+      int max_wait = frame_interval * 2;
+      // 音画同步：视频快于音频时等待，慢于音频时丢帧
       if (audioClock > 0) {
-        // 如果视频帧比音频帧快，则等待
-        if (diff > 80) {
+        if (diff > frame_interval) {
           int waited = 0;
-          const int max_wait = 40;
-          while (diff > 10 && waited < max_wait && !m_stop && !m_pause &&
-                 !m_seeking) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(5));
-            waited += 5;
+          while (diff > 5 && waited < max_wait && !m_stop && !m_pause && !m_seeking) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            waited += 2;
             audioClock = m_audioClockMs.load();
             diff = ms - audioClock;
           }
-          // 如果视频帧比音频帧快超过 80ms，则丢弃该视频帧
-          if (diff > 80) {
-            qWarning() << "Drop video frame: video ahead of audio (diff ="
-                       << diff << "ms, video ms =" << ms
-                       << ", audio ms =" << audioClock << ")";
+          if (diff > frame_interval) {
+            qWarning() << "[Sync] Drop video frame: video ahead (diff =" << diff << "ms, video =" << ms << ", audio =" << audioClock << ")";
             continue;
           }
-        // 如果视频帧比音频帧慢超过 300ms，则丢弃该视频帧
-        } else if (diff < -300) {
-          qWarning() << "Drop video frame: video lags audio too much (diff ="
-                     << diff << "ms, video ms =" << ms
-                     << ", audio ms =" << audioClock << ")";
+        } else if (diff < -frame_interval * 6) { // 允许最大音画滞后
+          qWarning() << "[Sync] Drop video frame: video lags (diff =" << diff << "ms, video =" << ms << ", audio =" << audioClock << ")";
           continue;
         }
       }
