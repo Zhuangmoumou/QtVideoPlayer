@@ -5,10 +5,14 @@ TEMPLATE = app
 
 SOURCES += main.cpp \
            VideoPlayer.cpp \
-           FFMpegDecoder.cpp
+           FFMpegDecoder.cpp \
+           LyricManager.cpp \
+           SubtitleManager.cpp
 
 HEADERS += VideoPlayer.h \
-           FFMpegDecoder.h
+           FFMpegDecoder.h \
+           LyricManager.h \
+           SubtitleManager.h
 
 QMAKE_CXXFLAGS += -Wno-deprecated-declarations
 

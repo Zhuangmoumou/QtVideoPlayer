@@ -8,6 +8,8 @@
 #include <QFileSystemWatcher> // 新增
 
 #include "FFMpegDecoder.h"
+#include "LyricManager.h"
+#include "SubtitleManager.h"
 
 class VideoPlayer : public QWidget {
   Q_OBJECT
@@ -51,39 +53,12 @@ private:
   qint64 duration = 0;
   qint64 currentPts = 0;
 
-  // 歌词
-  struct LyricLine {
-    qint64 time;
-    QString text;
-  };
-  QList<LyricLine> lyrics;
-  int currentLyricIndex = 0;
-  // 歌词动画
-  qreal lyricOpacity = 1.0;
-  int lastLyricIndex = -1;
-  QElapsedTimer lyricFadeTimer;
-
-  // SRT/ASS 字幕支持
-  struct SubtitleLine {
-    qint64 startTime;
-    qint64 endTime;
-    QString text;
-    QString assRaw; // 新增：原始 ass 行（用于样式渲染）
-  };
-  QList<SubtitleLine> subtitles;
-  int currentSubtitleIndex = -1;
-  void loadSrtSubtitle(const QString &path);
-  void loadAssSubtitle(const QString &path); // 新增：加载 ass 字幕
-  // 字幕模糊匹配
-  bool findSimilarSubtitle(const QString &videoPath, QString &subtitlePath);
-  // 计算莱文斯坦距离
-  int levenshteinDistance(const QString &s1, const QString &s2);
+  LyricManager *lyricManager;
+  SubtitleManager *subtitleManager;
 
   // libass 相关
   ASS_Library *assLibrary = nullptr;
   ASS_Renderer *assRenderer = nullptr;
-  ASS_Track *assTrack = nullptr;
-  bool hasAssSubtitle = false;
 
   QImage currentFrame;
   QString videoInfoLabel;
@@ -91,7 +66,6 @@ private:
   // 进度条和媒体信息显示控制
   bool showOverlayBar = false;
   QTimer *overlayBarTimer = nullptr;
-  void showOverlayBarForSeconds(int seconds);
 
   // 文件名滚动
   QString currentFileName;
@@ -106,20 +80,19 @@ private:
 
   QTimer *subtitleCheckTimer = nullptr;
 
-  void loadLyrics(const QString &path);
   void seekByDelta(int dx);
   void showOverlay(bool visible);
-  
-  // 补充缺少的函数声明
-  void parseLyrics(const QString &lyricText, const QRegExp &rx);
-  void updateLyricsIndex(qint64 pts);
-  void updateSubtitleIndex(qint64 pts);
   void drawOverlayBar(QPainter &p);
   void drawProgressBar(QPainter &p);
   void drawSubtitlesAndLyrics(QPainter &p);
   void drawSrtSubtitles(QPainter &p, const QRect &lyricRect);
   void drawLyrics(QPainter &p, const QRect &lyricRect);
   void drawAssSubtitles(QPainter &p);
+  void showOverlayBarForSeconds(int seconds);
 
   QFileSystemWatcher *screenStatusWatcher;
+
+  // 新增：歌词渐变相关
+  qreal lyricOpacity = 1.0;
+  QElapsedTimer lyricFadeTimer;
 };
