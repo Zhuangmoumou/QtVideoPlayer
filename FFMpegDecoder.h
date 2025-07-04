@@ -29,6 +29,7 @@ signals:
   void audioReady(const QByteArray &pcm);
   void durationChanged(qint64 ms);
   void positionChanged(qint64 ms);
+  void errorOccurred(const QString &message); // 新增：错误信号
 
 private:
   // 线程与同步

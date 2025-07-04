@@ -21,6 +21,7 @@
 #include <taglib/tag.h>
 #include <taglib/unsynchronizedlyricsframe.h>
 #include <taglib/xiphcomment.h>
+#include <QTimer>
 
 VideoPlayer::VideoPlayer(QWidget *parent) : QWidget(parent) {
   setAttribute(Qt::WA_AcceptTouchEvents);
@@ -47,6 +48,18 @@ VideoPlayer::VideoPlayer(QWidget *parent) : QWidget(parent) {
           [&](qint64 d) { duration = d; });
   connect(decoder, &FFMpegDecoder::positionChanged, this,
           &VideoPlayer::onPositionChanged);
+  // 新增：错误提示
+  errorShowTimer = new QTimer(this);
+  errorShowTimer->setSingleShot(true);
+  connect(errorShowTimer, &QTimer::timeout, this, [this]() {
+    errorMessage.clear();
+    update();
+  });
+  connect(decoder, &FFMpegDecoder::errorOccurred, this, [this](const QString &msg) {
+    errorMessage = msg;
+    errorShowTimer->start(3000); // 显示3秒
+    update();
+  });
 
   // Overlay 更新
   overlayTimer = new QTimer(this);
@@ -336,6 +349,24 @@ void VideoPlayer::paintEvent(QPaintEvent *) {
     QRect targetRect(QPoint(0, 0), imgSize);
     targetRect.moveCenter(rect().center());
     p.drawImage(targetRect, currentFrame);
+  }
+
+  // 错误提示：居中红色标签
+  if (!errorMessage.isEmpty()) {
+    QFont errFont("Microsoft YaHei", overlayFontSize + 4, QFont::Bold);
+    p.setFont(errFont);
+    QRect errRect = rect();
+    QString msg = errorMessage;
+    QFontMetrics fm(errFont);
+    int textWidth = fm.horizontalAdvance(msg);
+    int textHeight = fm.height();
+    QRect boxRect((width() - textWidth) / 2 - 30, (height() - textHeight) / 2 - 16, textWidth + 60, textHeight + 32);
+    p.setRenderHint(QPainter::Antialiasing, true);
+    p.setPen(Qt::NoPen);
+    p.setBrush(QColor(0, 0, 0, 180));
+    p.drawRoundedRect(boxRect, 18, 18);
+    p.setPen(QColor(220, 40, 40));
+    p.drawText(boxRect, Qt::AlignCenter, msg);
   }
 
   if (showOverlayBar) {

@@ -92,6 +92,10 @@ private:
 
   QFileSystemWatcher *screenStatusWatcher;
 
+  // 新增：错误提示
+  QString errorMessage;
+  QTimer *errorShowTimer = nullptr;
+
   // 新增：歌词渐变相关
   qreal lyricOpacity = 1.0;
   QElapsedTimer lyricFadeTimer;

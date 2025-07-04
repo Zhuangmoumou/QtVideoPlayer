@@ -121,6 +121,7 @@ void FFMpegDecoder::videoDecodeLoop() {
   if (avformat_open_input(&raw_fmt_ctx, m_path.toUtf8().constData(), nullptr,
                           &opts) < 0) {
     qWarning() << "Failed to open input file:" << m_path;
+    emit errorOccurred(tr("无法打开文件: %1").arg(m_path));
     av_dict_free(&opts);
     return;
   }
@@ -129,6 +130,7 @@ void FFMpegDecoder::videoDecodeLoop() {
   // 获取流信息
   if (avformat_find_stream_info(fmt_ctx.get(), nullptr) < 0) {
     qWarning() << "Failed to get stream info";
+    emit errorOccurred(tr("无法获取媒体流信息"));
     return;
   }
   // 获取视频流索引
@@ -146,23 +148,27 @@ void FFMpegDecoder::videoDecodeLoop() {
                                  AVMEDIA_TYPE_VIDEO);
   if (!vcodec) {
     qWarning() << "Video decoder not found";
+    emit errorOccurred(tr("未找到视频解码器"));
     return;
   }
   // 分配视频解码器上下文
   AVCodecContextPtr vctx = make_avcodec_ctx(vcodec);
   if (!vctx) {
     qWarning() << "Failed to allocate video decoder context";
+    emit errorOccurred(tr("无法分配视频解码器上下文"));
     return;
   }
   // 复制视频解码器参数
   if (avcodec_parameters_to_context(vctx.get(), fmt_ctx->streams[vid_idx]->codecpar) <
       0) {
     qWarning() << "Failed to copy video decoder parameters";
+    emit errorOccurred(tr("无法复制视频解码器参数"));
     return;
   }
   // 打开视频解码器
   if (avcodec_open2(vctx.get(), vcodec, nullptr) < 0) {
     qWarning() << "Failed to open video decoder";
+    emit errorOccurred(tr("无法打开视频解码器"));
     return;
   }
   // 获取视频宽高和时基
@@ -338,6 +344,7 @@ void FFMpegDecoder::audioDecodeLoop() {
   av_dict_set(&opts, "analyzeduration", "1000000", 0);
   if (avformat_open_input(&raw_fmt_ctx, m_path.toUtf8().constData(), nullptr, &opts) < 0) {
     qWarning() << "Failed to open input file:" << m_path;
+    emit errorOccurred(tr("无法打开文件: %1").arg(m_path));
     av_dict_free(&opts);
     return;
   }
@@ -345,6 +352,7 @@ void FFMpegDecoder::audioDecodeLoop() {
   AVFormatContextPtr fmt_ctx(raw_fmt_ctx);
   if (avformat_find_stream_info(fmt_ctx.get(), nullptr) < 0) {
     qWarning() << "Failed to get stream info";
+    emit errorOccurred(tr("无法获取媒体流信息"));
     return;
   }
   int aid_idx = -1;
@@ -359,19 +367,23 @@ void FFMpegDecoder::audioDecodeLoop() {
   AVCodec *acodec = find_decoder(fmt_ctx->streams[aid_idx]->codecpar->codec_id, AVMEDIA_TYPE_AUDIO);
   if (!acodec) {
     qWarning() << "Audio decoder not found";
+    emit errorOccurred(tr("未找到音频解码器"));
     return;
   }
   AVCodecContextPtr actx = make_avcodec_ctx(acodec);
   if (!actx) {
     qWarning() << "Failed to allocate audio decoder context";
+    emit errorOccurred(tr("无法分配音频解码器上下文"));
     return;
   }
   if (avcodec_parameters_to_context(actx.get(), fmt_ctx->streams[aid_idx]->codecpar) < 0) {
     qWarning() << "Failed to copy audio decoder parameters";
+    emit errorOccurred(tr("无法复制音频解码器参数"));
     return;
   }
   if (avcodec_open2(actx.get(), acodec, nullptr) < 0) {
     qWarning() << "Failed to open audio decoder";
+    emit errorOccurred(tr("无法打开音频解码器"));
     return;
   }
   AVRational atime_base = fmt_ctx->streams[aid_idx]->time_base;
@@ -381,6 +393,7 @@ void FFMpegDecoder::audioDecodeLoop() {
   swr_ctx = swr_alloc_set_opts(nullptr, av_get_default_channel_layout(OUT_CHANNELS), OUT_SAMPLE_FMT, OUT_SAMPLE_RATE, actx->channel_layout, actx->sample_fmt, actx->sample_rate, 0, nullptr);
   if (!swr_ctx || swr_init(swr_ctx) < 0) {
     qWarning() << "Failed to initialize audio resample context";
+    emit errorOccurred(tr("音频重采样初始化失败"));
     swr_free(&swr_ctx);
     return;
   }
