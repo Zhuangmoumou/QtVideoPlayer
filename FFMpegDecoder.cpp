@@ -2,6 +2,7 @@
 #include "qdebug.h"
 #include <QtDebug>
 #include <chrono>
+#include <memory>
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -11,6 +12,37 @@ extern "C" {
 #include <libswresample/swresample.h>
 #include <libswscale/swscale.h>
 }
+
+namespace {
+// 智能指针管理 AVFrame
+using AVFramePtr = std::unique_ptr<AVFrame, decltype(&av_frame_free)>;
+AVFramePtr make_avframe() { return AVFramePtr(av_frame_alloc(), &av_frame_free); }
+// 智能指针管理 AVPacket
+using AVPacketPtr = std::unique_ptr<AVPacket, decltype(&av_packet_free)>;
+AVPacketPtr make_avpacket() { return AVPacketPtr(av_packet_alloc(), &av_packet_free); }
+// 智能指针管理 AVCodecContext
+using AVCodecContextPtr = std::unique_ptr<AVCodecContext, decltype(&avcodec_free_context)>;
+AVCodecContextPtr make_avcodec_ctx(AVCodec *codec) { return AVCodecContextPtr(avcodec_alloc_context3(codec), &avcodec_free_context); }
+// 智能指针管理 AVFormatContext
+using AVFormatContextPtr = std::unique_ptr<AVFormatContext, decltype(&avformat_close_input)>;
+AVFormatContextPtr make_avformat_ctx(AVFormatContext *ctx) { return AVFormatContextPtr(ctx, &avformat_close_input); }
+
+// 查找解码器
+AVCodec *find_decoder(AVCodecID id, AVMediaType type) {
+  AVCodec *iter = av_codec_next(nullptr);
+  while (iter) {
+    if (iter->id == id && iter->decode != nullptr && iter->type == type) {
+      if (QString(iter->name).contains("rk", Qt::CaseInsensitive)) {
+        iter = av_codec_next(iter);
+        continue;
+      }
+      return iter;
+    }
+    iter = av_codec_next(iter);
+  }
+  return nullptr;
+}
+} // namespace
 
 static const int OUT_SAMPLE_RATE = 44100;
 static const int OUT_CHANNELS = 2;
@@ -76,21 +108,21 @@ bool FFMpegDecoder::isPaused() const { return m_pause; }
 
 void FFMpegDecoder::videoDecodeLoop() {
   // 打开输入文件
-  AVFormatContext *fmt_ctx = nullptr;
+  AVFormatContext *raw_fmt_ctx = nullptr;
   AVDictionary *opts = nullptr;
   av_dict_set(&opts, "probe_size", "1048576", 0);
   av_dict_set(&opts, "analyzeduration", "1000000", 0);
-  if (avformat_open_input(&fmt_ctx, m_path.toUtf8().constData(), nullptr,
+  if (avformat_open_input(&raw_fmt_ctx, m_path.toUtf8().constData(), nullptr,
                           &opts) < 0) {
     qWarning() << "Failed to open input file:" << m_path;
     av_dict_free(&opts);
     return;
   }
   av_dict_free(&opts);
+  AVFormatContextPtr fmt_ctx(raw_fmt_ctx, &avformat_close_input);
   // 获取流信息
-  if (avformat_find_stream_info(fmt_ctx, nullptr) < 0) {
+  if (avformat_find_stream_info(fmt_ctx.get(), nullptr) < 0) {
     qWarning() << "Failed to get stream info";
-    avformat_close_input(&fmt_ctx);
     return;
   }
   // 获取视频流索引
@@ -101,49 +133,30 @@ void FFMpegDecoder::videoDecodeLoop() {
       vid_idx = i;
   }
   if (vid_idx < 0) {
-    avformat_close_input(&fmt_ctx);
     return;
   }
   // 获取视频解码器
-  AVCodec *vcodec = nullptr;
-  AVCodec *iter = av_codec_next(nullptr);
-  while (iter) {
-    if (iter->id == fmt_ctx->streams[vid_idx]->codecpar->codec_id &&
-        iter->decode != nullptr && iter->type == AVMEDIA_TYPE_VIDEO) {
-      if (QString(iter->name).contains("rk", Qt::CaseInsensitive)) {
-        iter = av_codec_next(iter);
-        continue;
-      }
-      vcodec = iter;
-      break;
-    }
-    iter = av_codec_next(iter);
-  }
+  AVCodec *vcodec = find_decoder(fmt_ctx->streams[vid_idx]->codecpar->codec_id,
+                                 AVMEDIA_TYPE_VIDEO);
   if (!vcodec) {
     qWarning() << "Video decoder not found";
-    avformat_close_input(&fmt_ctx);
     return;
   }
   // 分配视频解码器上下文
-  AVCodecContext *vctx = avcodec_alloc_context3(vcodec);
+  AVCodecContextPtr vctx = make_avcodec_ctx(vcodec);
   if (!vctx) {
     qWarning() << "Failed to allocate video decoder context";
-    avformat_close_input(&fmt_ctx);
     return;
   }
   // 复制视频解码器参数
-  if (avcodec_parameters_to_context(vctx, fmt_ctx->streams[vid_idx]->codecpar) <
+  if (avcodec_parameters_to_context(vctx.get(), fmt_ctx->streams[vid_idx]->codecpar) <
       0) {
     qWarning() << "Failed to copy video decoder parameters";
-    avcodec_free_context(&vctx);
-    avformat_close_input(&fmt_ctx);
     return;
   }
   // 打开视频解码器
-  if (avcodec_open2(vctx, vcodec, nullptr) < 0) {
+  if (avcodec_open2(vctx.get(), vcodec, nullptr) < 0) {
     qWarning() << "Failed to open video decoder";
-    avcodec_free_context(&vctx);
-    avformat_close_input(&fmt_ctx);
     return;
   }
   // 获取视频宽高和时基
@@ -162,8 +175,8 @@ void FFMpegDecoder::videoDecodeLoop() {
     rgb_buf = (uint8_t *)av_malloc(rgb_buf_size);
   }
   // 分配 AVPacket 和 AVFrame
-  AVPacket *pkt = av_packet_alloc();
-  AVFrame *frame = av_frame_alloc();
+  AVPacketPtr pkt = make_avpacket();
+  AVFramePtr frame = make_avframe();
   // 获取视频播放开始时间
   using clock = std::chrono::steady_clock;
   clock::time_point playback_start_time;
@@ -184,11 +197,11 @@ void FFMpegDecoder::videoDecodeLoop() {
     // 跳转时等待
     if (m_seeking) {
       int64_t ts = m_seekTarget * (AV_TIME_BASE / 1000);
-      av_seek_frame(fmt_ctx, -1, ts, AVSEEK_FLAG_BACKWARD);
-      avcodec_flush_buffers(vctx);
+      av_seek_frame(fmt_ctx.get(), -1, ts, AVSEEK_FLAG_BACKWARD);
+      avcodec_flush_buffers(vctx.get());
       playback_start_time = clock::now();
-      av_packet_unref(pkt);
-      av_frame_unref(frame);
+      av_packet_unref(pkt.get());
+      av_frame_unref(frame.get());
       {
         std::lock_guard<std::mutex> lk(m_mutex);
         m_videoSeekHandled = true;
@@ -199,7 +212,7 @@ void FFMpegDecoder::videoDecodeLoop() {
       continue;
     }
     // 读取视频帧
-    if (av_read_frame(fmt_ctx, pkt) < 0) {
+    if (av_read_frame(fmt_ctx.get(), pkt.get()) < 0) {
       m_eof = true;
       std::unique_lock<std::mutex> lk(m_mutex);
       m_cond.wait(lk, [&] { return m_stop || m_seeking || m_eof == false; });
@@ -213,18 +226,18 @@ void FFMpegDecoder::videoDecodeLoop() {
     }
     // 判断是否为视频流
     if (pkt->stream_index != vid_idx) {
-      av_packet_unref(pkt);
+      av_packet_unref(pkt.get());
       continue;
     }
     // 跳转时等待
     if (m_seeking) {
-      av_packet_unref(pkt);
+      av_packet_unref(pkt.get());
       continue;
     }
     // 发送视频帧到解码器
-    avcodec_send_packet(vctx, pkt);
+    avcodec_send_packet(vctx.get(), pkt.get());
     // 接收解码后的视频帧
-    while (avcodec_receive_frame(vctx, frame) == 0) {
+    while (avcodec_receive_frame(vctx.get(), frame.get()) == 0) {
       // 跳转时等待
       if (m_seeking)
         break;
@@ -314,43 +327,31 @@ void FFMpegDecoder::videoDecodeLoop() {
       }
       emit positionChanged(ms);
     }
-    av_packet_unref(pkt);
+    av_packet_unref(pkt.get());
   }
   if (rgb_buf)
     av_free(rgb_buf);
-  av_frame_free(&frame);
-  av_packet_free(&pkt);
+  // 已由智能指针管理，无需手动释放 AVFrame/AVPacket
   if (sws_ctx)
     sws_freeContext(sws_ctx);
-  if (vctx)
-    avcodec_free_context(&vctx);
-  avformat_close_input(&fmt_ctx);
 }
 
 void FFMpegDecoder::audioDecodeLoop() {
-  // 创建 AVFormatContext 对象，用于打开输入文件
-  AVFormatContext *fmt_ctx = nullptr;
-  // 创建 AVDictionary 对象，用于设置打开输入文件的参数
+  AVFormatContext *raw_fmt_ctx = nullptr;
   AVDictionary *opts = nullptr;
-  // 设置 probe_size 参数，表示探测文件的大小
   av_dict_set(&opts, "probe_size", "1048576", 0);
-  // 设置 analyzeduration 参数，表示分析文件的时间长度
   av_dict_set(&opts, "analyzeduration", "1000000", 0);
-  // 打开输入文件
-  if (avformat_open_input(&fmt_ctx, m_path.toUtf8().constData(), nullptr,
-                          &opts) < 0) {
+  if (avformat_open_input(&raw_fmt_ctx, m_path.toUtf8().constData(), nullptr, &opts) < 0) {
     qWarning() << "Failed to open input file:" << m_path;
     av_dict_free(&opts);
     return;
   }
   av_dict_free(&opts);
-  // 获取输入文件的流信息
-  if (avformat_find_stream_info(fmt_ctx, nullptr) < 0) {
+  AVFormatContextPtr fmt_ctx(raw_fmt_ctx, &avformat_close_input);
+  if (avformat_find_stream_info(fmt_ctx.get(), nullptr) < 0) {
     qWarning() << "Failed to get stream info";
-    avformat_close_input(&fmt_ctx);
     return;
   }
-  // 获取音频流的索引
   int aid_idx = -1;
   for (unsigned i = 0; i < fmt_ctx->nb_streams; i++) {
     AVCodecParameters *p = fmt_ctx->streams[i]->codecpar;
@@ -358,84 +359,45 @@ void FFMpegDecoder::audioDecodeLoop() {
       aid_idx = i;
   }
   if (aid_idx < 0) {
-    avformat_close_input(&fmt_ctx);
     return;
   }
-  // 获取音频解码器
-  AVCodec *acodec = nullptr;
-  AVCodec *iter = av_codec_next(nullptr);
-  while (iter) {
-    if (iter->id == fmt_ctx->streams[aid_idx]->codecpar->codec_id &&
-        iter->decode != nullptr && iter->type == AVMEDIA_TYPE_AUDIO) {
-      if (QString(iter->name).contains("rk", Qt::CaseInsensitive)) {
-        iter = av_codec_next(iter);
-        continue;
-      }
-      acodec = iter;
-      break;
-    }
-    iter = av_codec_next(iter);
-  }
+  AVCodec *acodec = find_decoder(fmt_ctx->streams[aid_idx]->codecpar->codec_id, AVMEDIA_TYPE_AUDIO);
   if (!acodec) {
     qWarning() << "Audio decoder not found";
-    avformat_close_input(&fmt_ctx);
     return;
   }
-  // 分配音频解码器上下文
-  AVCodecContext *actx = avcodec_alloc_context3(acodec);
+  AVCodecContextPtr actx = make_avcodec_ctx(acodec);
   if (!actx) {
     qWarning() << "Failed to allocate audio decoder context";
-    avformat_close_input(&fmt_ctx);
     return;
   }
-  // 复制音频解码器参数
-  if (avcodec_parameters_to_context(actx, fmt_ctx->streams[aid_idx]->codecpar) <
-      0) {
+  if (avcodec_parameters_to_context(actx.get(), fmt_ctx->streams[aid_idx]->codecpar) < 0) {
     qWarning() << "Failed to copy audio decoder parameters";
-    avcodec_free_context(&actx);
-    avformat_close_input(&fmt_ctx);
     return;
   }
-  // 打开音频解码器
-  if (avcodec_open2(actx, acodec, nullptr) < 0) {
+  if (avcodec_open2(actx.get(), acodec, nullptr) < 0) {
     qWarning() << "Failed to open audio decoder";
-    avcodec_free_context(&actx);
-    avformat_close_input(&fmt_ctx);
     return;
   }
-  // 获取音频流的时基
   AVRational atime_base = fmt_ctx->streams[aid_idx]->time_base;
-  // 创建音频重采样上下文
   SwrContext *swr_ctx = nullptr;
   if (actx->channel_layout == 0)
     actx->channel_layout = av_get_default_channel_layout(actx->channels);
-  swr_ctx =
-      swr_alloc_set_opts(nullptr, av_get_default_channel_layout(OUT_CHANNELS),
-                         OUT_SAMPLE_FMT, OUT_SAMPLE_RATE, actx->channel_layout,
-                         actx->sample_fmt, actx->sample_rate, 0, nullptr);
+  swr_ctx = swr_alloc_set_opts(nullptr, av_get_default_channel_layout(OUT_CHANNELS), OUT_SAMPLE_FMT, OUT_SAMPLE_RATE, actx->channel_layout, actx->sample_fmt, actx->sample_rate, 0, nullptr);
   if (!swr_ctx || swr_init(swr_ctx) < 0) {
     qWarning() << "Failed to initialize audio resample context";
     swr_free(&swr_ctx);
-    avformat_close_input(&fmt_ctx);
     return;
   }
-  // 分配 AVPacket 和 AVFrame 对象
-  AVPacket *pkt = av_packet_alloc();
-  AVFrame *frame = av_frame_alloc();
-  // 分配输出缓冲区
+  AVPacketPtr pkt = make_avpacket();
+  AVFramePtr frame = make_avframe();
   uint8_t **out_buf = nullptr;
   int out_buf_samples = 0;
-  // 创建时钟对象
   using clock = std::chrono::steady_clock;
-  // 记录音频播放开始时间
   clock::time_point audio_playback_start_time;
-  // 记录第一个音频帧的pts
   int64_t first_audio_pts = AV_NOPTS_VALUE;
-  // 记录是否是第一个音频帧
   bool first_audio_frame = true;
-  // 循环解码音频帧
   while (!m_stop) {
-    // 如果暂停，则等待
     if (m_pause) {
       std::unique_lock<std::mutex> lk(m_mutex);
       m_cond.wait(lk, [&] { return m_stop || !m_pause || m_seeking; });
@@ -445,16 +407,15 @@ void FFMpegDecoder::audioDecodeLoop() {
       first_audio_pts = AV_NOPTS_VALUE;
       first_audio_frame = true;
     }
-    // 如果正在 seek，则 seek 到指定位置
     if (m_seeking) {
       int64_t ts = m_seekTarget * (AV_TIME_BASE / 1000);
-      av_seek_frame(fmt_ctx, -1, ts, AVSEEK_FLAG_BACKWARD);
-      avcodec_flush_buffers(actx);
+      av_seek_frame(fmt_ctx.get(), -1, ts, AVSEEK_FLAG_BACKWARD);
+      avcodec_flush_buffers(actx.get());
       audio_playback_start_time = clock::now();
       first_audio_pts = AV_NOPTS_VALUE;
       first_audio_frame = true;
-      av_packet_unref(pkt);
-      av_frame_unref(frame);
+      av_packet_unref(pkt.get());
+      av_frame_unref(frame.get());
       {
         std::lock_guard<std::mutex> lk(m_mutex);
         m_audioSeekHandled = true;
@@ -464,8 +425,7 @@ void FFMpegDecoder::audioDecodeLoop() {
       }
       continue;
     }
-    // 播放结束，等待后续操作
-    if (av_read_frame(fmt_ctx, pkt) < 0) {
+    if (av_read_frame(fmt_ctx.get(), pkt.get()) < 0) {
       m_eof = true;
       std::unique_lock<std::mutex> lk(m_mutex);
       m_cond.wait(lk, [&] { return m_stop || m_seeking || m_eof == false; });
@@ -477,20 +437,16 @@ void FFMpegDecoder::audioDecodeLoop() {
       }
       continue;
     }
-    // 如果不是音频流，则释放 AVPacket 对象并继续
     if (pkt->stream_index != aid_idx) {
-      av_packet_unref(pkt);
+      av_packet_unref(pkt.get());
       continue;
     }
-    // 如果在 seeking，则释放 AVPacket 对象并继续
     if (m_seeking) {
-      av_packet_unref(pkt);
+      av_packet_unref(pkt.get());
       continue;
     }
-    // 发送 AVPacket 到解码器
-    avcodec_send_packet(actx, pkt);
-    // 接收解码后的音频帧
-    while (avcodec_receive_frame(actx, frame) == 0) {
+    avcodec_send_packet(actx.get(), pkt.get());
+    while (avcodec_receive_frame(actx.get(), frame.get()) == 0) {
       if (m_seeking)
         break;
       if (frame->nb_samples == 0) {
@@ -515,21 +471,16 @@ void FFMpegDecoder::audioDecodeLoop() {
         first_audio_pts = ms;
         first_audio_frame = false;
       } else {
-        int64_t elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                              clock::now() - audio_playback_start_time)
-                              .count();
+        int64_t elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(clock::now() - audio_playback_start_time).count();
         double diff = (ms - first_audio_pts) - elapsed;
         if (std::abs(diff) < 500) {
-          audio_diff_avg = audio_diff_avg * audio_diff_avg_coef +
-                           diff * (1.0 - audio_diff_avg_coef);
+          audio_diff_avg = audio_diff_avg * audio_diff_avg_coef + diff * (1.0 - audio_diff_avg_coef);
         }
-        double sync_threshold = std::max(
-            5.0, std::min(audio_diff_threshold * elapsed * 0.001, 30.0));
+        double sync_threshold = std::max(5.0, std::min(audio_diff_threshold * elapsed * 0.001, 30.0));
         if (std::abs(diff) > sync_threshold) {
           if (diff > 0) {
             double delay = std::min(diff * 0.85, 40.0);
-            std::this_thread::sleep_for(
-                std::chrono::milliseconds(static_cast<int>(delay)));
+            std::this_thread::sleep_for(std::chrono::milliseconds(static_cast<int>(delay)));
           } else {
             if (diff < -200) {
               continue;
@@ -537,45 +488,33 @@ void FFMpegDecoder::audioDecodeLoop() {
           }
         }
         if (std::abs(audio_diff_avg) > audio_drift_threshold) {
-          auto adjustment =
-              std::chrono::milliseconds(static_cast<int>(audio_diff_avg * 0.6));
+          auto adjustment = std::chrono::milliseconds(static_cast<int>(audio_diff_avg * 0.6));
           audio_playback_start_time += adjustment;
           audio_diff_avg *= 0.3;
         }
       }
-      int out_nb = av_rescale_rnd(
-          swr_get_delay(swr_ctx, actx->sample_rate) + frame->nb_samples,
-          OUT_SAMPLE_RATE, actx->sample_rate, AV_ROUND_UP);
+      int out_nb = av_rescale_rnd(swr_get_delay(swr_ctx, actx->sample_rate) + frame->nb_samples, OUT_SAMPLE_RATE, actx->sample_rate, AV_ROUND_UP);
       if (out_nb > out_buf_samples) {
         if (out_buf) {
           av_freep(&out_buf[0]);
           av_freep(&out_buf);
         }
-        av_samples_alloc_array_and_samples(&out_buf, nullptr, OUT_CHANNELS,
-                                           out_nb, OUT_SAMPLE_FMT, 0);
+        av_samples_alloc_array_and_samples(&out_buf, nullptr, OUT_CHANNELS, out_nb, OUT_SAMPLE_FMT, 0);
         out_buf_samples = out_nb;
       }
-      int converted =
-          swr_convert(swr_ctx, out_buf, out_nb, (const uint8_t **)frame->data,
-                      frame->nb_samples);
-      int data_size = av_samples_get_buffer_size(nullptr, OUT_CHANNELS,
-                                                 converted, OUT_SAMPLE_FMT, 1);
+      int converted = swr_convert(swr_ctx, out_buf, out_nb, (const uint8_t **)frame->data, frame->nb_samples);
+      int data_size = av_samples_get_buffer_size(nullptr, OUT_CHANNELS, converted, OUT_SAMPLE_FMT, 1);
       QByteArray pcm((const char *)out_buf[0], data_size);
       emit audioReady(pcm);
       emit positionChanged(ms);
     }
-    av_packet_unref(pkt);
+    av_packet_unref(pkt.get());
   }
-  // 清理资源
   if (out_buf) {
     av_freep(&out_buf[0]);
     av_freep(&out_buf);
   }
-  av_frame_free(&frame);
-  av_packet_free(&pkt);
   if (swr_ctx)
     swr_free(&swr_ctx);
-  if (actx)
-    avcodec_free_context(&actx);
-  avformat_close_input(&fmt_ctx);
+  // AVFormatContext 已由智能指针管理，无需手动释放
 }
