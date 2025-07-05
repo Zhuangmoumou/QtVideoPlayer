@@ -179,16 +179,16 @@ VideoPlayer::VideoPlayer(QWidget *parent) : QWidget(parent) {
         update();
       });
     }
-    QAction *muteAct = menu.addAction(tr("静音轨道"));
-    muteAct->setCheckable(true);
-    muteAct->setChecked(decoder->currentAudioTrack() == -1);
-    audioGroup->addAction(muteAct);
-    connect(muteAct, &QAction::triggered, this, [this]() {
-      decoder->setAudioTrack(-1);
-      errorMessage = tr("切换音轨: 静音轨道");
-      errorShowTimer->start(2000);
-      update();
-    });
+    // QAction *muteAct = menu.addAction(tr("静音轨道"));
+    // muteAct->setCheckable(true);
+    // muteAct->setChecked(decoder->currentAudioTrack() == -1);
+    // audioGroup->addAction(muteAct);
+    // connect(muteAct, &QAction::triggered, this, [this]() {
+    //   decoder->setAudioTrack(-1);
+    //   errorMessage = tr("切换音轨: 静音轨道");
+    //   errorShowTimer->start(2000);
+    //   update();
+    // });
     menu.addSeparator();
     QActionGroup *videoGroup = new QActionGroup(&menu);
     videoGroup->setExclusive(true);
