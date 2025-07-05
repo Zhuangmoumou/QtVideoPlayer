@@ -145,11 +145,11 @@ void FFMpegDecoder::setVideoTrack(int index) {
   if (m_videoTrackIndex != index) {
     m_videoTrackIndex = index;
     if (index == -1) {
-      // 切换到空轨道，不 seek，只唤醒线程并清空画面
+      m_seeking = true;
+      m_videoSeekHandled = false;
       m_cond.notify_all();
       emit frameReady(QImage());
     } else {
-      // 切换到有效轨道才 seek
       m_seeking = true;
       m_videoSeekHandled = false;
       m_audioSeekHandled = false;
