@@ -24,6 +24,18 @@ public:
   void togglePause();
   bool isPaused() const; // 新增：判断是否暂停
 
+  // 音轨切换
+  void setAudioTrack(int index); // index=-1 为静音
+  int audioTrackCount() const;
+  int currentAudioTrack() const;
+  QString audioTrackName(int idx) const;
+
+  // 视频轨道切换
+  void setVideoTrack(int index); // index=-1 为无视频
+  int videoTrackCount() const;
+  int currentVideoTrack() const;
+  QString videoTrackName(int idx) const;
+
 signals:
   void frameReady(const QImage &img);
   void audioReady(const QByteArray &pcm);
@@ -58,4 +70,12 @@ private:
   // 解码主循环
   void videoDecodeLoop();
   void audioDecodeLoop();
+
+  int m_audioTrackIndex = 0; // -1为静音
+  mutable std::vector<int> m_audioStreamIndices; // 存储所有音频流索引
+  mutable std::vector<QString> m_audioStreamNames; // 存储音轨描述
+
+  int m_videoTrackIndex = 0; // -1为无视频
+  mutable std::vector<int> m_videoStreamIndices;
+  mutable std::vector<QString> m_videoStreamNames;
 };

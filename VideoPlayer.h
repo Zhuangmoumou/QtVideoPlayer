@@ -6,6 +6,9 @@
 #include <QWidget>
 #include <ass/ass.h> // 新增：libass 头文件
 #include <QFileSystemWatcher> // 新增
+#include <QPushButton>
+#include <QMenu>
+#include <QAction>
 
 #include "FFMpegDecoder.h"
 #include "LyricRenderer.h"
@@ -99,4 +102,9 @@ private:
 
   LyricManager *lyricManager;
   SubtitleManager *subtitleManager;
+
+  // 音轨/视频轨道切换按钮和菜单
+  QPushButton *trackButton = nullptr;
+  QMenu *audioMenu = nullptr;
+  QMenu *videoMenu = nullptr;
 };

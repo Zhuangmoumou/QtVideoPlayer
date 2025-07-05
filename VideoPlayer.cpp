@@ -24,6 +24,9 @@
 #include <taglib/unsynchronizedlyricsframe.h>
 #include <taglib/xiphcomment.h>
 #include <QTimer>
+#include <QPushButton>
+#include <QMenu>
+#include <QAction>
 
 VideoPlayer::VideoPlayer(QWidget *parent) : QWidget(parent) {
   setAttribute(Qt::WA_AcceptTouchEvents);
@@ -149,6 +152,68 @@ VideoPlayer::VideoPlayer(QWidget *parent) : QWidget(parent) {
   subtitleManager = new SubtitleManager();
   lyricRenderer = new LyricRenderer(lyricManager);
   subtitleRenderer = new SubtitleRenderer(subtitleManager);
+
+  // 轨道切换按钮和菜单
+  trackButton = new QPushButton("轨道", this);
+  trackButton->setGeometry(10, 40, 60, 28);
+  trackButton->setStyleSheet("background:rgba(30,30,30,180);color:white;border-radius:8px;");
+  trackButton->raise();
+  // 移除audioMenu、videoMenu成员变量和updateMenus相关逻辑
+  connect(trackButton, &QPushButton::clicked, this, [this]() {
+    QMenu menu;
+    QActionGroup *audioGroup = new QActionGroup(&menu);
+    audioGroup->setExclusive(true);
+    int acnt = decoder->audioTrackCount();
+    for (int i = 0; i < acnt; ++i) {
+      QAction *act = menu.addAction(decoder->audioTrackName(i));
+      act->setCheckable(true);
+      act->setChecked(decoder->currentAudioTrack() == i);
+      audioGroup->addAction(act);
+      connect(act, &QAction::triggered, this, [this, i]() {
+        decoder->setAudioTrack(i);
+        errorMessage = tr("切换音轨: %1").arg(decoder->audioTrackName(i));
+        errorShowTimer->start(2000);
+        update();
+      });
+    }
+    QAction *muteAct = menu.addAction(tr("静音轨道"));
+    muteAct->setCheckable(true);
+    muteAct->setChecked(decoder->currentAudioTrack() == -1);
+    audioGroup->addAction(muteAct);
+    connect(muteAct, &QAction::triggered, this, [this]() {
+      decoder->setAudioTrack(-1);
+      errorMessage = tr("切换音轨: 静音轨道");
+      errorShowTimer->start(2000);
+      update();
+    });
+    menu.addSeparator();
+    QActionGroup *videoGroup = new QActionGroup(&menu);
+    videoGroup->setExclusive(true);
+    int vcnt = decoder->videoTrackCount();
+    for (int i = 0; i < vcnt; ++i) {
+      QAction *act = menu.addAction(decoder->videoTrackName(i));
+      act->setCheckable(true);
+      act->setChecked(decoder->currentVideoTrack() == i);
+      videoGroup->addAction(act);
+      connect(act, &QAction::triggered, this, [this, i]() {
+        decoder->setVideoTrack(i);
+        errorMessage = tr("切换视频轨道: %1").arg(decoder->videoTrackName(i));
+        errorShowTimer->start(2000);
+        update();
+      });
+    }
+    QAction *noVideoAct = menu.addAction(tr("无视频轨道"));
+    noVideoAct->setCheckable(true);
+    noVideoAct->setChecked(decoder->currentVideoTrack() == -1);
+    videoGroup->addAction(noVideoAct);
+    connect(noVideoAct, &QAction::triggered, this, [this]() {
+      decoder->setVideoTrack(-1);
+      errorMessage = tr("切换视频轨道: 无视频轨道");
+      errorShowTimer->start(2000);
+      update();
+    });
+    menu.exec(trackButton->mapToGlobal(QPoint(0, trackButton->height())));
+  });
 }
 
 VideoPlayer::~VideoPlayer() {
