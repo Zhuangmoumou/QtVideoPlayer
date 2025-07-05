@@ -105,6 +105,7 @@ private:
 
   // 音轨/视频轨道切换按钮和菜单
   QPushButton *trackButton = nullptr;
+  QElapsedTimer *trackButtonTimer;
   QMenu *audioMenu = nullptr;
   QMenu *videoMenu = nullptr;
 };

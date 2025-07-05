@@ -3,6 +3,7 @@
 #include "SubtitleManager.h"
 #include "LyricRenderer.h"
 #include "SubtitleRenderer.h"
+#include "qelapsedtimer.h"
 #include "qglobal.h"
 #include <QCoreApplication>
 #include <QDebug>
@@ -79,6 +80,9 @@ VideoPlayer::VideoPlayer(QWidget *parent) : QWidget(parent) {
     update();
   });
   showOverlayBar = false;
+
+  trackButtonTimer = new QElapsedTimer();
+  trackButtonTimer->start();
 
   // 文件名滚动
   scrollTimer = new QTimer(this);
@@ -158,7 +162,6 @@ VideoPlayer::VideoPlayer(QWidget *parent) : QWidget(parent) {
   trackButton->setGeometry(10, 40, 60, 28);
   trackButton->setStyleSheet("background:rgba(30,30,30,180);color:white;border-radius:8px;");
   trackButton->raise();
-  // 移除audioMenu、videoMenu成员变量和updateMenus相关逻辑
   connect(trackButton, &QPushButton::clicked, this, [this]() {
     QMenu menu;
     QActionGroup *audioGroup = new QActionGroup(&menu);
@@ -434,6 +437,12 @@ void VideoPlayer::paintEvent(QPaintEvent *) {
     p.drawRoundedRect(boxRect, 18, 18);
     p.setPen(QColor(220, 40, 40));
     p.drawText(boxRect, Qt::AlignCenter, msg);
+  }
+  if (trackButtonTimer->elapsed() > 100) {
+      trackButton->setVisible(showOverlayBar);
+      trackButton->setEnabled(true);
+      trackButton->raise();
+      trackButtonTimer->restart();
   }
   if (showOverlayBar) {
     drawOverlayBar(p);
