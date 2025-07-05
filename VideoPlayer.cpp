@@ -1,6 +1,8 @@
 #include "VideoPlayer.h"
 #include "LyricManager.h"
 #include "SubtitleManager.h"
+#include "LyricRenderer.h"
+#include "SubtitleRenderer.h"
 #include "qglobal.h"
 #include <QCoreApplication>
 #include <QDebug>
@@ -145,6 +147,8 @@ VideoPlayer::VideoPlayer(QWidget *parent) : QWidget(parent) {
 
   lyricManager = new LyricManager();
   subtitleManager = new SubtitleManager();
+  lyricRenderer = new LyricRenderer(lyricManager);
+  subtitleRenderer = new SubtitleRenderer(subtitleManager);
 }
 
 VideoPlayer::~VideoPlayer() {
@@ -168,6 +172,8 @@ VideoPlayer::~VideoPlayer() {
   // QProcess::startDetached("ubus", QStringList() << "call" <<
   // "eq_drc_process.output.rpc" << "control" << R"({"action":"Close"})");
 
+  delete lyricRenderer;
+  delete subtitleRenderer;
   delete lyricManager;
   delete subtitleManager;
 }
@@ -341,7 +347,6 @@ void VideoPlayer::resizeEvent(QResizeEvent *) {
 void VideoPlayer::paintEvent(QPaintEvent *) {
   QPainter p(this);
   p.fillRect(rect(), Qt::black);
-
   if (!currentFrame.isNull()) {
     QSize imgSize = currentFrame.size();
     QSize widgetSize = size();
@@ -350,12 +355,9 @@ void VideoPlayer::paintEvent(QPaintEvent *) {
     targetRect.moveCenter(rect().center());
     p.drawImage(targetRect, currentFrame);
   }
-
-  // 错误提示：居中红色标签
   if (!errorMessage.isEmpty()) {
     QFont errFont("Microsoft YaHei", overlayFontSize + 4, QFont::Bold);
     p.setFont(errFont);
-    QRect errRect = rect();
     QString msg = errorMessage;
     QFontMetrics fm(errFont);
     int textWidth = fm.horizontalAdvance(msg);
@@ -368,15 +370,13 @@ void VideoPlayer::paintEvent(QPaintEvent *) {
     p.setPen(QColor(220, 40, 40));
     p.drawText(boxRect, Qt::AlignCenter, msg);
   }
-
   if (showOverlayBar) {
     drawOverlayBar(p);
   }
-
   drawSubtitlesAndLyrics(p);
-
   if (subtitleManager->hasAss() && subtitleManager->getAssTrack() && assRenderer) {
-    drawAssSubtitles(p);
+    subtitleRenderer->setAssRenderer(assRenderer);
+    subtitleRenderer->drawAssSubtitles(p, width(), height(), currentPts);
   }
 }
 
@@ -469,178 +469,8 @@ void VideoPlayer::drawProgressBar(QPainter &p) {
 
 void VideoPlayer::drawSubtitlesAndLyrics(QPainter &p) {
   QRect lyricRect = rect().adjusted(0, height() - 70, 0, -10);
-  drawSrtSubtitles(p, lyricRect);
-  drawLyrics(p, lyricRect);
-}
-
-void VideoPlayer::drawSrtSubtitles(QPainter &p, const QRect &lyricRect) {
-  // 渐变动画（出现和消失）
-  static int lastSubIdx = -2;
-  static QElapsedTimer subFadeTimer;
-  static bool fadingOut = false;
-  static qreal fadeOpacity = 1.0;
-  static QString lastSubText;
-  qreal opacity = 1.0;
-  QString subText;
-  const auto &subs = subtitleManager->getSubtitles();
-  int curIdx = subtitleManager->getCurrentSubtitleIndex();
-  if (curIdx >= 0 && curIdx < subs.size()) {
-    subText = subs[curIdx].text;
-    if (lastSubIdx != curIdx) {
-      subFadeTimer.restart();
-      fadingOut = false;
-      lastSubIdx = curIdx;
-      fadeOpacity = 1.0;
-      lastSubText = subText;
-    }
-  } else {
-    // 只有在字幕刚刚消失时才触发一次淡出动画
-    if (!fadingOut && lastSubIdx >= 0) {
-      subFadeTimer.restart();
-      fadingOut = true;
-      fadeOpacity = 1.0;
-      subText = lastSubText;
-    } else if (fadingOut && lastSubIdx >= 0) {
-      subText = lastSubText;
-    } else {
-      // 没有字幕且没有淡出动画需要播放
-      return;
-    }
-  }
-  if (!subText.isEmpty()) {
-    if (!fadingOut) {
-      if (subFadeTimer.isValid()) {
-        qint64 elapsed = subFadeTimer.elapsed();
-        if (elapsed < 400) {
-          opacity = qMin(1.0, elapsed / 400.0);
-          QTimer::singleShot(16, this, [this] { update(); });
-        } else {
-          opacity = 1.0;
-        }
-      }
-      fadeOpacity = opacity;
-    } else {
-      if (subFadeTimer.isValid()) {
-        qint64 elapsed = subFadeTimer.elapsed();
-        if (elapsed < 400) {
-          opacity = fadeOpacity * (1.0 - elapsed / 400.0);
-          QTimer::singleShot(16, this, [this] { update(); });
-        } else {
-          opacity = 0.0;
-          fadingOut = false;
-          lastSubIdx = -2; // 彻底重置，防止多次淡出
-          lastSubText.clear();
-        }
-      }
-    }
-    if (opacity > 0.01) {
-      QFont subFont("Microsoft YaHei", overlayFontSize - 2, QFont::Bold);
-      p.setFont(subFont);
-      QRect textRect = p.fontMetrics().boundingRect(
-          lyricRect, Qt::AlignHCenter | Qt::AlignVCenter, subText);
-      textRect = textRect.marginsAdded(QMargins(10, 8, 10, 8));
-      textRect.moveCenter(lyricRect.center());
-      p.save();
-      p.setRenderHint(QPainter::Antialiasing, true);
-      QColor bgColor(0, 0, 0, int(180 * opacity));
-      p.setPen(Qt::NoPen);
-      p.setBrush(bgColor);
-      p.drawRoundedRect(textRect, 12, 12);
-      p.restore();
-      p.save();
-      QColor textColor(255, 255, 255, int(255 * opacity));
-      p.setPen(textColor);
-      p.drawText(textRect, Qt::AlignHCenter | Qt::AlignVCenter, subText);
-      p.restore();
-    }
-    if (opacity > 0.01)
-      return;
-  }
-}
-
-void VideoPlayer::drawLyrics(QPainter &p, const QRect &lyricRect) {
-  qreal opacity = lyricOpacity;
-  if (lyricFadeTimer.isValid()) {
-    qint64 elapsed = lyricFadeTimer.elapsed();
-    if (elapsed < 400) {
-      opacity = qMin(1.0, elapsed / 400.0);
-    } else {
-      opacity = 1.0;
-    }
-  }
-  const auto &lyrics = lyricManager->getLyrics();
-  int curIdx = lyricManager->getCurrentLyricIndex();
-  int lastIdx = lyricManager->getLastLyricIndex();
-  if (curIdx < lyrics.size()) {
-    QFont lyricFont("Microsoft YaHei", overlayFontSize - 2, QFont::Bold);
-    p.setFont(lyricFont);
-    QString lyricText = lyrics[curIdx].text;
-    QRect textRect = p.fontMetrics().boundingRect(
-        lyricRect, Qt::AlignHCenter | Qt::AlignVCenter, lyricText);
-    textRect = textRect.marginsAdded(QMargins(10, 8, 10, 8));
-    textRect.moveCenter(lyricRect.center());
-    p.save();
-    p.setRenderHint(QPainter::Antialiasing, true);
-    QColor bgColor(0, 0, 0, int(180 * opacity));
-    p.setPen(Qt::NoPen);
-    p.setBrush(bgColor);
-    p.drawRoundedRect(textRect, 12, 12);
-    p.restore();
-    p.save();
-    QColor textColor(255, 255, 255, int(255 * opacity));
-    p.setPen(textColor);
-    p.drawText(textRect, Qt::AlignHCenter | Qt::AlignVCenter, lyricText);
-    p.restore();
-  }
-  // 上一行歌词淡出（可选）
-  if (lastIdx >= 0 && lastIdx < lyrics.size() && lyricOpacity < 1.0) {
-    QFont lyricFont("Microsoft YaHei", overlayFontSize - 2, QFont::Bold);
-    p.setFont(lyricFont);
-    QString lyricText = lyrics[lastIdx].text;
-    QRect textRect = p.fontMetrics().boundingRect(
-        lyricRect, Qt::AlignHCenter | Qt::AlignVCenter, lyricText);
-    textRect = textRect.marginsAdded(QMargins(10, 8, 10, 8));
-    textRect.moveCenter(lyricRect.center());
-    p.save();
-    p.setRenderHint(QPainter::Antialiasing, true);
-    QColor bgColor(0, 0, 0, int(180 * (1.0 - opacity) * 0.7));
-    p.setPen(Qt::NoPen);
-    p.setBrush(bgColor);
-    p.drawRoundedRect(textRect, 12, 12);
-    p.restore();
-    p.save();
-    QColor textColor(255, 255, 255, int(255 * (1.0 - opacity) * 0.7));
-    p.setPen(textColor);
-    p.drawText(textRect, Qt::AlignHCenter | Qt::AlignVCenter, lyricText);
-    p.restore();
-  }
-}
-
-void VideoPlayer::drawAssSubtitles(QPainter &p) {
-  if (subtitleManager->hasAss() && subtitleManager->getAssTrack() && assRenderer) {
-    int w = width(), h = height();
-    ass_set_frame_size(assRenderer, w, h);
-    long long now = currentPts;
-    int detectChange = 0;
-    ASS_Image *img =
-        ass_render_frame(assRenderer, subtitleManager->getAssTrack(), now, &detectChange);
-    for (; img; img = img->next) {
-      QImage qimg((const uchar *)img->bitmap, img->w, img->h, img->stride,
-                  QImage::Format_Alpha8);
-      QColor color;
-      color.setRgba(qRgba((img->color >> 24) & 0xFF, (img->color >> 16) & 0xFF,
-                          (img->color >> 8) & 0xFF, 255 - (img->color & 0xFF)));
-      QImage colored(qimg.size(), QImage::Format_ARGB32_Premultiplied);
-      colored.fill(Qt::transparent);
-      QPainter qp(&colored);
-      qp.setCompositionMode(QPainter::CompositionMode_Source);
-      qp.fillRect(qimg.rect(), color);
-      qp.setCompositionMode(QPainter::CompositionMode_DestinationIn);
-      qp.drawImage(0, 0, qimg);
-      qp.end();
-      p.drawImage(img->dst_x, img->dst_y, colored);
-    }
-  }
+  subtitleRenderer->drawSrtSubtitles(p, lyricRect, overlayFontSize, currentPts);
+  lyricRenderer->drawLyrics(p, lyricRect, overlayFontSize, lyricOpacity, lyricFadeTimer);
 }
 
 void VideoPlayer::updateOverlay() {
@@ -651,7 +481,6 @@ void VideoPlayer::updateOverlay() {
       update();
     } else {
       lyricOpacity = 1.0;
-      // lastLyricIndex = -1; // lastLyricIndex已由LyricManager管理
       overlayTimer->stop();
       update();
     }

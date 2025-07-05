@@ -7,12 +7,16 @@ SOURCES += main.cpp \
            VideoPlayer.cpp \
            FFMpegDecoder.cpp \
            LyricManager.cpp \
-           SubtitleManager.cpp
+           SubtitleManager.cpp \
+           LyricRenderer.cpp \
+           SubtitleRenderer.cpp
 
 HEADERS += VideoPlayer.h \
            FFMpegDecoder.h \
            LyricManager.h \
-           SubtitleManager.h
+           SubtitleManager.h \
+           LyricRenderer.h \
+           SubtitleRenderer.h
 
 QMAKE_CXXFLAGS += -Wno-deprecated-declarations
 

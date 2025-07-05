@@ -8,8 +8,8 @@
 #include <QFileSystemWatcher> // 新增
 
 #include "FFMpegDecoder.h"
-#include "LyricManager.h"
-#include "SubtitleManager.h"
+#include "LyricRenderer.h"
+#include "SubtitleRenderer.h"
 
 class VideoPlayer : public QWidget {
   Q_OBJECT
@@ -53,8 +53,8 @@ private:
   qint64 duration = 0;
   qint64 currentPts = 0;
 
-  LyricManager *lyricManager;
-  SubtitleManager *subtitleManager;
+  LyricRenderer *lyricRenderer = nullptr;
+  SubtitleRenderer *subtitleRenderer = nullptr;
 
   // libass 相关
   ASS_Library *assLibrary = nullptr;
@@ -85,9 +85,6 @@ private:
   void drawOverlayBar(QPainter &p);
   void drawProgressBar(QPainter &p);
   void drawSubtitlesAndLyrics(QPainter &p);
-  void drawSrtSubtitles(QPainter &p, const QRect &lyricRect);
-  void drawLyrics(QPainter &p, const QRect &lyricRect);
-  void drawAssSubtitles(QPainter &p);
   void showOverlayBarForSeconds(int seconds);
 
   QFileSystemWatcher *screenStatusWatcher;
@@ -99,4 +96,7 @@ private:
   // 新增：歌词渐变相关
   qreal lyricOpacity = 1.0;
   QElapsedTimer lyricFadeTimer;
+
+  LyricManager *lyricManager;
+  SubtitleManager *subtitleManager;
 };

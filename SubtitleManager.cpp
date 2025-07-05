@@ -59,17 +59,22 @@ void SubtitleManager::loadAssSubtitle(const QString &path, ASS_Library *assLibra
 
 void SubtitleManager::updateSubtitleIndex(qint64 pts) {
     int subIdx = currentSubtitleIndex;
-    if (subIdx + 1 < subtitles.size() && pts >= subtitles[subIdx + 1].startTime) {
-        while (subIdx + 1 < subtitles.size() && pts >= subtitles[subIdx + 1].startTime) {
-            subIdx++;
-        }
-    } else if (subIdx > 0 && pts < subtitles[subIdx].startTime) {
-        while (subIdx > 0 && pts < subtitles[subIdx].startTime) {
-            subIdx--;
+    // 先判断当前字幕是否还在区间内
+    if (subIdx >= 0 && subIdx < subtitles.size() &&
+        pts >= subtitles[subIdx].startTime && pts <= subtitles[subIdx].endTime) {
+        // 当前字幕还在区间内，不做任何变化
+        return;
+    }
+    // 查找新的字幕区间
+    int newIdx = -1;
+    for (int i = 0; i < subtitles.size(); ++i) {
+        if (pts >= subtitles[i].startTime && pts <= subtitles[i].endTime) {
+            newIdx = i;
+            break;
         }
     }
-    if (currentSubtitleIndex != subIdx) {
-        currentSubtitleIndex = subIdx;
+    if (currentSubtitleIndex != newIdx) {
+        currentSubtitleIndex = newIdx;
     }
 }
 
