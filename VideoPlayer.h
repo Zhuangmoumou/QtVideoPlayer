@@ -9,6 +9,7 @@
 #include <QPushButton>
 #include <QMenu>
 #include <QAction>
+#include <QSharedPointer>
 
 #include "FFMpegDecoder.h"
 #include "LyricRenderer.h"
@@ -32,7 +33,7 @@ protected:
   void paintEvent(QPaintEvent *e) override;
 
 private slots:
-  void onFrame(const QImage &frame);
+  void onFrame(const QSharedPointer<QImage> &frame);
   void onAudioData(const QByteArray &data);
   void onPositionChanged(qint64 pts);
   void updateOverlay();
@@ -63,7 +64,7 @@ private:
   ASS_Library *assLibrary = nullptr;
   ASS_Renderer *assRenderer = nullptr;
 
-  QImage currentFrame;
+  QSharedPointer<QImage> currentFrame;
   QString videoInfoLabel;
 
   // 进度条和媒体信息显示控制

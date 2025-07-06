@@ -3,6 +3,7 @@
 #include <QtDebug>
 #include <chrono>
 #include <memory>
+#include <QSharedPointer>
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -65,6 +66,9 @@ static const AVSampleFormat OUT_SAMPLE_FMT = AV_SAMPLE_FMT_S16;
 FFMpegDecoder::FFMpegDecoder(QObject *parent) : QObject(parent) {
   // 注册所有的 FFMpeg 组件
   av_register_all();
+  
+  // 注册 QSharedPointer<QImage> 类型，以便在信号槽中使用
+  qRegisterMetaType<QSharedPointer<QImage>>("QSharedPointer<QImage>");
 }
 
 FFMpegDecoder::~FFMpegDecoder() { stop(); }
@@ -156,7 +160,7 @@ void FFMpegDecoder::setVideoTrack(int index) {
       m_seeking = true;
       m_videoSeekHandled = false;
       m_cond.notify_all();
-      emit frameReady(QImage());
+      emit frameReady(QSharedPointer<QImage>());
     } else {
       m_seeking = true;
       m_videoSeekHandled = false;
@@ -233,7 +237,7 @@ void FFMpegDecoder::videoDecodeLoop() {
       }
       if (vid_idx < 0) {
         // 空轨道：只同步音频进度，并清空画面
-        emit frameReady(QImage());
+        emit frameReady(QSharedPointer<QImage>());
         while (!m_stop) {
           // 动态检测是否切回有轨道
           {
@@ -506,25 +510,54 @@ void FFMpegDecoder::videoDecodeLoop() {
               continue;
             }
           }
+          // 确保 RGB 缓冲区已正确分配
+          if (!rgb_buf) {
+            // qWarning() << "RGB buffer not allocated, allocating now";
+            rgb_buf_size = av_image_get_buffer_size(AV_PIX_FMT_RGB24, vwidth, vheight, 1);
+            rgb_buf = (uint8_t *)av_malloc(rgb_buf_size);
+            if (!rgb_buf) {
+              qWarning() << "Failed to allocate RGB buffer";
+              continue;
+            }
+          }
+          
           // 转换视频帧格式为 RGB24
           uint8_t *dst[1] = {rgb_buf};
           int dst_linesize[1] = {rgb_stride};
           sws_scale(sws_ctx, frame->data, frame->linesize, 0, vheight, dst,
                     dst_linesize);
-          // 只在必要时复制 QImage
-          QImage img(rgb_buf, vwidth, vheight, rgb_stride,
-                     QImage::Format_RGB888);
-          if (img.isNull()) {
-            qWarning()
-                << "QImage isNull after construction, fallback to buffer copy";
-            QByteArray tmp = QByteArray::fromRawData((const char *)rgb_buf,
-                                                     vheight * rgb_stride);
-            QImage img2((const uchar *)tmp.constData(), vwidth, vheight,
-                        QImage::Format_RGB888);
-            emit frameReady(img2.copy());
-          } else {
-            emit frameReady(img.copy());
+          
+          // 使用共享的缓冲区创建 QImage
+          struct RGBBufferDeleter {
+            void operator()(QImage* img) {
+              if (img) {
+                delete img;
+              }
+            }
+          };
+
+          QSharedPointer<QImage> imgPtr;
+          if (rgb_buf) {
+            // 直接使用 rgb_buf 创建 QImage 并设置自定义删除器来释放内存
+            QImage* rawImg = new QImage(rgb_buf, vwidth, vheight, rgb_stride, 
+                                      QImage::Format_RGB888, 
+                                      [](void* buf) { av_free(buf); }, 
+                                      rgb_buf);
+            
+            if (!rawImg->isNull()) {
+              // 成功创建图像，使用自定义删除器包装到 QSharedPointer
+              imgPtr = QSharedPointer<QImage>(rawImg, RGBBufferDeleter());
+              // 将 rgb_buf 设为 nullptr，因为现在由 QImage 负责管理
+              rgb_buf = nullptr;
+            } else {
+              // 创建失败，回退到复制模式
+              delete rawImg;
+              qWarning() << "QImage isNull after construction, fallback to buffer copy";
+              QImage tempImg(rgb_buf, vwidth, vheight, rgb_stride, QImage::Format_RGB888);
+              imgPtr = QSharedPointer<QImage>(new QImage(tempImg.copy()));
+            }
           }
+          emit frameReady(imgPtr);
           emit positionChanged(ms);
         }
         av_packet_unref(pkt.get());

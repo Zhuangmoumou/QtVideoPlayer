@@ -15,6 +15,7 @@
 #include <QPainterPath>
 #include <QProcess> // 新增
 #include <QTextStream>
+#include <QSharedPointer>
 #include <ass/ass.h>
 #include <taglib/attachedpictureframe.h>
 #include <taglib/fileref.h>
@@ -325,8 +326,8 @@ void VideoPlayer::play(const QString &path) {
   subtitleCheckTimer->start();
 }
 
-void VideoPlayer::onFrame(const QImage &frame) {
-  currentFrame = frame.copy();
+void VideoPlayer::onFrame(const QSharedPointer<QImage> &frame) {
+  currentFrame = frame;
   update();
 }
 
@@ -425,13 +426,13 @@ void VideoPlayer::resizeEvent(QResizeEvent *) {
 void VideoPlayer::paintEvent(QPaintEvent *) {
   QPainter p(this);
   p.fillRect(rect(), Qt::black);
-  if (!currentFrame.isNull()) {
-    QSize imgSize = currentFrame.size();
+  if (currentFrame && !currentFrame->isNull()) {
+    QSize imgSize = currentFrame->size();
     QSize widgetSize = size();
     imgSize.scale(widgetSize, Qt::KeepAspectRatio);
     QRect targetRect(QPoint(0, 0), imgSize);
     targetRect.moveCenter(rect().center());
-    p.drawImage(targetRect, currentFrame);
+    p.drawImage(targetRect, *currentFrame);
   }
   if (!errorMessage.isEmpty()) {
     QFont errFont("Microsoft YaHei", overlayFontSize + 4, QFont::Bold);

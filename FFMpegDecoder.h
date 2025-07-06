@@ -2,6 +2,7 @@
 #include <QImage>
 #include <QObject>
 #include <QString>
+#include <QSharedPointer>
 #include <atomic>
 #include <condition_variable>
 #include <mutex>
@@ -37,7 +38,7 @@ public:
   QString videoTrackName(int idx) const;
 
 signals:
-  void frameReady(const QImage &img);
+  void frameReady(const QSharedPointer<QImage> &img);
   void audioReady(const QByteArray &pcm);
   void durationChanged(qint64 ms);
   void positionChanged(qint64 ms);
