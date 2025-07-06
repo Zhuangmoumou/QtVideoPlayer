@@ -339,8 +339,18 @@ void VideoPlayer::onPositionChanged(qint64 pts) {
   }
   currentPts = pts;
 
+  // 记录当前歌词索引
+  int oldLyricIndex = lyricManager->getCurrentLyricIndex();
+  
+  // 更新歌词和字幕索引
   lyricManager->updateLyricsIndex(pts);
   subtitleManager->updateSubtitleIndex(pts);
+  
+  // 如果歌词索引发生变化，重置淡入淡出计时器并启动动画
+  if (oldLyricIndex != lyricManager->getCurrentLyricIndex()) {
+    lyricFadeTimer.restart();
+    overlayTimer->start();
+  }
 
   update(); // 确保进度条和歌词/字幕刷新
 }
@@ -550,11 +560,15 @@ void VideoPlayer::drawSubtitlesAndLyrics(QPainter &p) {
 void VideoPlayer::updateOverlay() {
   if (lyricFadeTimer.isValid()) {
     qint64 elapsed = lyricFadeTimer.elapsed();
-    if (elapsed < 400) {
-      lyricOpacity = qMin(1.0, elapsed / 400.0);
+    if (elapsed < 600) { // 延长一点淡入时间，让效果更明显
+      // 非线性淡入效果，开始较慢，然后加速
+      lyricOpacity = qMin(1.0, 0.2 + (elapsed / 600.0) * 0.8);
       update();
     } else {
+      // 淡入完成
       lyricOpacity = 1.0;
+      // 保持计时器有效，以便LyricRenderer能够使用它计算淡出效果
+      // 但停止定时更新，因为淡入已完成
       overlayTimer->stop();
       update();
     }
