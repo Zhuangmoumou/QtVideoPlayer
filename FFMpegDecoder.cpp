@@ -84,9 +84,9 @@ void FFMpegDecoder::start(const QString &path) {
   m_pause = false;
   // 设置 seek 标志为 false
   m_seeking = false;
-  // 设置视频seek处理标志为false
+  // 设置视频 seek 处理标志为 false
   m_videoSeekHandled = false;
-  // 设置音频seek处理标志为false
+  // 设置音频 seek 处理标志为 false
   m_audioSeekHandled = false;
   // 设置 eof 标志为 false
   m_eof = false;
@@ -263,8 +263,10 @@ void FFMpegDecoder::videoDecodeLoop() {
             continue;
           }
           emit positionChanged(m_audioClockMs.load());
-          for (int i = 0; i < 40 && !m_stop; ++i)
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+          // 使用单次较长的休眠替代多次短休眠，减少 CPU 唤醒次数
+          if (!m_stop) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(40));
+          }
         }
         if (m_stop)
           break;
@@ -356,9 +358,9 @@ void FFMpegDecoder::videoDecodeLoop() {
         if (av_read_frame(fmt_ctx.get(), pkt.get()) < 0) {
           m_eof = true;
           std::unique_lock<std::mutex> lk(m_mutex);
-          m_cond.wait_for(lk, std::chrono::milliseconds(30), [&] {
+          m_cond.wait_for(lk, std::chrono::milliseconds(50), [&] {
             return m_stop || m_seeking || m_eof == false;
-          });
+          }); // 增加等待时间，减少 CPU 轮询
           if (m_stop)
             break;
           if (m_seeking) {
@@ -400,8 +402,8 @@ void FFMpegDecoder::videoDecodeLoop() {
             hasAudio = (m_audioTrackIndex != -1);
           }
 
-          // 计算自适应丢帧/等待阈值（如帧间隔的2倍，最小10ms最大80ms）
-          int frame_interval = 40; // 默认25fps
+          // 计算自适应丢帧/等待阈值（如帧间隔的 2 倍，最小 10ms 最大 80ms）
+          int frame_interval = 40; // 默认 25fps
           if (vctx->framerate.num && vctx->framerate.den) {
             frame_interval = 1000 * vctx->framerate.den / vctx->framerate.num;
             frame_interval = std::max(10, std::min(frame_interval, 80));
@@ -415,10 +417,21 @@ void FFMpegDecoder::videoDecodeLoop() {
               // 视频领先音频，需要等待
               int waited = 0;
               // 增加状态检查，减少不必要的睡眠
-              while (diff > 5 && waited < max_wait && !m_stop && !m_pause &&
-                     !m_seeking) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(2));
-                waited += 2;
+              // 如果差值较大，直接睡眠大部分时间，减少 CPU 唤醒
+              if (diff > 20 && waited < max_wait && !m_stop && !m_pause && !m_seeking) {
+                int sleep_time = static_cast<int>(diff * 0.8); // 睡眠差值的 80%
+                std::this_thread::sleep_for(std::chrono::milliseconds(sleep_time));
+                waited += sleep_time;
+                
+                // 更新时钟差值
+                audioClock = m_audioClockMs.load();
+                diff = ms - audioClock;
+              }
+
+              // 精细调整剩余差值
+              while (diff > 5 && waited < max_wait && !m_stop && !m_pause && !m_seeking) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(5)); // 增加睡眠间隔
+                waited += 5;
                 // 更新时钟差值
                 audioClock = m_audioClockMs.load();
                 diff = ms - audioClock;
@@ -501,7 +514,7 @@ void FFMpegDecoder::videoDecodeLoop() {
             }
             sws_ctx = sws_getCachedContext(
                 nullptr, vwidth, vheight, (AVPixelFormat)frame->format, vwidth,
-                vheight, AV_PIX_FMT_RGB24, SWS_FAST_BILINEAR, nullptr, nullptr,
+                vheight, AV_PIX_FMT_RGB24, SWS_BILINEAR, nullptr, nullptr,
                 nullptr);
             sws_src_pix_fmt = frame->format;
             if (!sws_ctx) {
@@ -725,18 +738,22 @@ void FFMpegDecoder::audioDecodeLoop() {
       }
     }
     if (isSilent) {
-      // 静音：直接发送空 PCM，不退出线程
-      QByteArray silence(2048, 0);
+      // 静音：使用静态预分配的静音缓冲区，避免反复创建
+      static QByteArray silence(2048, 0);
       emit audioReady(silence);
       // 不再在静音时由音频线程 emit positionChanged，交由视频线程推进
-      for (int i = 0; i < 40 && !m_stop; ++i)
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      // 使用单次较长的休眠替代多次短休眠，减少 CPU 唤醒次数
+      if (!m_stop) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(40));
+      }
       continue;
     }
     if (av_read_frame(fmt_ctx.get(), pkt.get()) < 0) {
       m_eof = true;
       std::unique_lock<std::mutex> lk(m_mutex);
-      m_cond.wait(lk, [&] { return m_stop || m_seeking || m_eof == false; });
+      m_cond.wait_for(lk, std::chrono::milliseconds(50), [&] { 
+        return m_stop || m_seeking || m_eof == false; 
+      }); // 设置超时等待，减少 CPU 占用
       if (m_stop)
         break;
       if (m_seeking) {
