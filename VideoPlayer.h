@@ -43,6 +43,7 @@ private:
   QIODevice *audioIO;
   FFMpegDecoder *decoder;
   QTimer *overlayTimer;
+  QTimer *frameRateTimer; // 帧率控制定时器
 
   // 音频输出参数（补充声明）
   int audioSampleRate = 44100;
@@ -90,6 +91,7 @@ private:
   void drawProgressBar(QPainter &p);
   void drawSubtitlesAndLyrics(QPainter &p);
   void showOverlayBarForSeconds(int seconds);
+  void scheduleUpdate(); // 控制帧率的更新调度
 
   QFileSystemWatcher *screenStatusWatcher;
 
@@ -109,4 +111,9 @@ private:
   QElapsedTimer *trackButtonTimer;
   QMenu *audioMenu = nullptr;
   QMenu *videoMenu = nullptr;
+  
+  // 帧率控制
+  qint64 lastScrollUpdateTime; // 上次滚动更新时间
+  bool updatePending = false; // 是否有未处理的更新请求
+  qint64 lastUpdateTime = 0; // 上次更新时间
 };

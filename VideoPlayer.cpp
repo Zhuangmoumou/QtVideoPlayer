@@ -5,6 +5,7 @@
 #include "SubtitleRenderer.h"
 #include "qelapsedtimer.h"
 #include "qglobal.h"
+#include <QDateTime>
 #include <QCoreApplication>
 #include <QDebug>
 #include <QDir>
@@ -13,7 +14,7 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
-#include <QProcess> // 新增
+#include <QProcess>
 #include <QTextStream>
 #include <QSharedPointer>
 #include <ass/ass.h>
@@ -30,7 +31,7 @@
 #include <QMenu>
 #include <QAction>
 
-VideoPlayer::VideoPlayer(QWidget *parent) : QWidget(parent) {
+VideoPlayer::VideoPlayer(QWidget *parent) : QWidget(parent), lastScrollUpdateTime(0), updatePending(false), lastUpdateTime(0) {
   setAttribute(Qt::WA_AcceptTouchEvents);
   setWindowFlags(Qt::FramelessWindowHint);
 
@@ -60,12 +61,12 @@ VideoPlayer::VideoPlayer(QWidget *parent) : QWidget(parent) {
   errorShowTimer->setSingleShot(true);
   connect(errorShowTimer, &QTimer::timeout, this, [this]() {
     errorMessage.clear();
-    update();
+    scheduleUpdate();
   });
   connect(decoder, &FFMpegDecoder::errorOccurred, this, [this](const QString &msg) {
     errorMessage = msg;
-    errorShowTimer->start(3000); // 显示3秒
-    update();
+    errorShowTimer->start(3000); // 显示 3 秒
+    scheduleUpdate();
   });
 
   // Overlay 更新
@@ -73,37 +74,63 @@ VideoPlayer::VideoPlayer(QWidget *parent) : QWidget(parent) {
   overlayTimer->setInterval(200);
   connect(overlayTimer, &QTimer::timeout, this, &VideoPlayer::updateOverlay);
 
-  // 新增：进度条和媒体信息显示定时器
+  // 进度条和媒体信息显示定时器
   overlayBarTimer = new QTimer(this);
   overlayBarTimer->setSingleShot(true);
   connect(overlayBarTimer, &QTimer::timeout, this, [this]() {
     showOverlayBar = false;
-    update();
+    scheduleUpdate();
   });
   showOverlayBar = false;
 
   trackButtonTimer = new QElapsedTimer();
   trackButtonTimer->start();
+  
+  // 帧率控制定时器 - 60fps (约 16.67ms)
+  frameRateTimer = new QTimer(this);
+  frameRateTimer->setInterval(16); // ~60fps
+  connect(frameRateTimer, &QTimer::timeout, this, [this]() {
+    if (updatePending) {
+      updatePending = false;
+      QWidget::update();
+    }
+  });
+  frameRateTimer->start();
 
   // 文件名滚动
   scrollTimer = new QTimer(this);
-  scrollTimer->setInterval(40); // 25fps
+  scrollTimer->setInterval(80); // 降低到12.5fps，原来是25fps
   scrollPause = false;
   scrollPauseTimer = new QTimer(this);
   scrollPauseTimer->setSingleShot(true);
+
+  // 上次滚动更新时间
+  lastScrollUpdateTime = 0;
+
   connect(scrollTimer, &QTimer::timeout, this, [this]() {
     if (scrollPause)
       return;
+
+    // 获取当前时间
+    qint64 currentTime = QDateTime::currentMSecsSinceEpoch();
+
+    // 增加滚动偏移
     scrollOffset += 2;
-    update();
+
+    // 只有当显示覆盖栏时或者距离上次更新超 200ms 时才刷新界面
+    if (showOverlayBar || currentTime - lastScrollUpdateTime > 200) {
+      lastScrollUpdateTime = currentTime;
+      scheduleUpdate();
+    }
   });
+
   connect(scrollPauseTimer, &QTimer::timeout, this, [this]() {
     scrollPause = false;
     scrollOffset = 0;
-    update();
+    scheduleUpdate();
   });
-  scrollOffset = 0;
 
+  scrollOffset = 0;
   // 新增：字幕定时检查定时器
   subtitleCheckTimer = new QTimer(this);
   subtitleCheckTimer->setInterval(1000);
@@ -121,7 +148,7 @@ VideoPlayer::VideoPlayer(QWidget *parent) : QWidget(parent) {
       if (!found && curIdx != -1) {
         // 通过subtitleManager重置下标
         subtitleManager->updateSubtitleIndex(-1);
-        update();
+        scheduleUpdate();
       }
     }
   });
@@ -177,7 +204,7 @@ VideoPlayer::VideoPlayer(QWidget *parent) : QWidget(parent) {
         decoder->setAudioTrack(i);
         errorMessage = tr("切换音轨: %1").arg(decoder->audioTrackName(i));
         errorShowTimer->start(2000);
-        update();
+        scheduleUpdate();
       });
     }
     // QAction *muteAct = menu.addAction(tr("静音轨道"));
@@ -188,7 +215,7 @@ VideoPlayer::VideoPlayer(QWidget *parent) : QWidget(parent) {
     //   decoder->setAudioTrack(-1);
     //   errorMessage = tr("切换音轨: 静音轨道");
     //   errorShowTimer->start(2000);
-    //   update();
+    //   scheduleUpdate();
     // });
     menu.addSeparator();
     QActionGroup *videoGroup = new QActionGroup(&menu);
@@ -203,7 +230,7 @@ VideoPlayer::VideoPlayer(QWidget *parent) : QWidget(parent) {
         decoder->setVideoTrack(i);
         errorMessage = tr("切换视频轨道: %1").arg(decoder->videoTrackName(i));
         errorShowTimer->start(2000);
-        update();
+        scheduleUpdate();
       });
     }
     QAction *noVideoAct = menu.addAction(tr("无视频轨道"));
@@ -214,7 +241,7 @@ VideoPlayer::VideoPlayer(QWidget *parent) : QWidget(parent) {
       decoder->setVideoTrack(-1);
       errorMessage = tr("切换视频轨道: 无视频轨道");
       errorShowTimer->start(2000);
-      update();
+      scheduleUpdate();
     });
     menu.exec(trackButton->mapToGlobal(QPoint(0, trackButton->height())));
   });
@@ -225,6 +252,7 @@ VideoPlayer::~VideoPlayer() {
   audioOutput->stop();
   scrollTimer->stop();
   subtitleCheckTimer->stop();
+  frameRateTimer->stop();
 
   // 新增：libass 资源释放
   // 由SubtitleManager自动管理ASS资源，无需手动释放assTrack/hasAssSubtitle
@@ -321,14 +349,14 @@ void VideoPlayer::play(const QString &path) {
   show();
   showOverlayBar = true;
   overlayBarTimer->start(5 * 1000);
-  update();
+  scheduleUpdate();
   scrollTimer->start();
   subtitleCheckTimer->start();
 }
 
 void VideoPlayer::onFrame(const QSharedPointer<QImage> &frame) {
   currentFrame = frame;
-  update();
+  scheduleUpdate();
 }
 
 void VideoPlayer::onAudioData(const QByteArray &data) { audioIO->write(data); }
@@ -338,22 +366,31 @@ void VideoPlayer::onPositionChanged(qint64 pts) {
   if (isSeeking) {
     return;
   }
+
+  // 检查 pts 变化是否足够大以至于需要更新UI
+  // 只有当时间变化超过100ms或者是显示覆盖栏时才更新进度条
+  bool needUpdate = showOverlayBar || abs(currentPts - pts) > 100;
+
   currentPts = pts;
 
   // 记录当前歌词索引
   int oldLyricIndex = lyricManager->getCurrentLyricIndex();
-  
+
   // 更新歌词和字幕索引
   lyricManager->updateLyricsIndex(pts);
   subtitleManager->updateSubtitleIndex(pts);
-  
+
   // 如果歌词索引发生变化，重置淡入淡出计时器并启动动画
   if (oldLyricIndex != lyricManager->getCurrentLyricIndex()) {
     lyricFadeTimer.restart();
     overlayTimer->start();
+    needUpdate = true;  // 歌词变化时需要更新 UI
   }
 
-  update(); // 确保进度条和歌词/字幕刷新
+  // 只在需要时更新 UI
+  if (needUpdate) {
+    scheduleUpdate();
+  }
 }
 
 void VideoPlayer::mousePressEvent(QMouseEvent *e) {
@@ -373,7 +410,7 @@ void VideoPlayer::mouseReleaseEvent(QMouseEvent *) {
     }
     showOverlayBar = true;
     overlayBarTimer->start(5 * 1000);
-    update();
+    scheduleUpdate();
   } else {
     decoder->togglePause();
     // 判断当前是否为暂停状态
@@ -381,12 +418,12 @@ void VideoPlayer::mouseReleaseEvent(QMouseEvent *) {
       // 暂停时一直显示 overlay
       overlayBarTimer->stop();
       showOverlayBar = true;
-      update();
+      scheduleUpdate();
     } else {
       // 播放时显示 5 秒 overlay
       showOverlayBar = true;
       overlayBarTimer->start(5 * 1000);
-      update();
+      scheduleUpdate();
     }
   }
 }
@@ -404,7 +441,7 @@ void VideoPlayer::mouseMoveEvent(QMouseEvent *e) {
 
   overlayBarTimer->stop();
   showOverlayBar = true;
-  update();
+  scheduleUpdate();
 }
 
 void VideoPlayer::seekByDelta(int dx) {
@@ -563,15 +600,22 @@ void VideoPlayer::updateOverlay() {
     qint64 elapsed = lyricFadeTimer.elapsed();
     if (elapsed < 600) { // 延长一点淡入时间，让效果更明显
       // 非线性淡入效果，开始较慢，然后加速
-      lyricOpacity = qMin(1.0, 0.2 + (elapsed / 600.0) * 0.8);
-      update();
+      double newOpacity = qMin(1.0, 0.2 + (elapsed / 600.0) * 0.8);
+
+      // 只有当不透明度变化超过 0.03 时才更新界面
+      if (qAbs(newOpacity - lyricOpacity) > 0.03) {
+        lyricOpacity = newOpacity;
+        scheduleUpdate();
+      }
     } else {
       // 淡入完成
-      lyricOpacity = 1.0;
+      if (lyricOpacity < 1.0) {
+        lyricOpacity = 1.0;
+        scheduleUpdate();
+      }
       // 保持计时器有效，以便LyricRenderer能够使用它计算淡出效果
       // 但停止定时更新，因为淡入已完成
       overlayTimer->stop();
-      update();
     }
   }
 }
@@ -579,5 +623,18 @@ void VideoPlayer::updateOverlay() {
 void VideoPlayer::showOverlayBarForSeconds(int seconds) {
   showOverlayBar = true;
   overlayBarTimer->start(seconds * 1000);
-  update();
+}
+void VideoPlayer::scheduleUpdate() {
+  // 获取当前时间戳
+  qint64 currentTime = QDateTime::currentMSecsSinceEpoch();
+
+  // 如果距离上次更新时间超过 16ms (约 60 fps)，立即更新界面
+  if (currentTime - lastUpdateTime > 16) {
+    lastUpdateTime = currentTime;
+    QWidget::update();
+  } else if (currentTime - lastUpdateTime > 5) {
+    // 只有当间隔超过 5ms 时才设置标记，避免过于频繁的更新请求
+    updatePending = true;
+  }
+  // 小于 5ms 的更新请求会被忽略，防止频繁的 UI 更新
 }
