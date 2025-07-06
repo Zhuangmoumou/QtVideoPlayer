@@ -83,8 +83,6 @@ private:
   // 统一 overlay 字号
   int overlayFontSize = 10;
 
-  QTimer *subtitleCheckTimer = nullptr;
-
   void seekByDelta(int dx);
   void showOverlay(bool visible);
   void drawOverlayBar(QPainter &p);

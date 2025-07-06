@@ -131,27 +131,6 @@ VideoPlayer::VideoPlayer(QWidget *parent) : QWidget(parent), lastScrollUpdateTim
   });
 
   scrollOffset = 0;
-  // 新增：字幕定时检查定时器
-  subtitleCheckTimer = new QTimer(this);
-  subtitleCheckTimer->setInterval(1000);
-  connect(subtitleCheckTimer, &QTimer::timeout, this, [this]() {
-    const auto &subs = subtitleManager->getSubtitles();
-    int curIdx = subtitleManager->getCurrentSubtitleIndex();
-    if (!subs.isEmpty()) {
-      bool found = false;
-      for (const auto &subtitle : subs) {
-        if (currentPts >= subtitle.startTime && currentPts <= subtitle.endTime) {
-          found = true;
-          break;
-        }
-      }
-      if (!found && curIdx != -1) {
-        // 通过subtitleManager重置下标
-        subtitleManager->updateSubtitleIndex(-1);
-        scheduleUpdate();
-      }
-    }
-  });
 
   // 新增：libass 初始化
   assLibrary = ass_library_init();
@@ -251,7 +230,6 @@ VideoPlayer::~VideoPlayer() {
   decoder->stop();
   audioOutput->stop();
   scrollTimer->stop();
-  subtitleCheckTimer->stop();
   frameRateTimer->stop();
 
   // 新增：libass 资源释放
@@ -351,7 +329,6 @@ void VideoPlayer::play(const QString &path) {
   overlayBarTimer->start(5 * 1000);
   scheduleUpdate();
   scrollTimer->start();
-  subtitleCheckTimer->start();
 }
 
 void VideoPlayer::onFrame(const QSharedPointer<QImage> &frame) {
@@ -367,8 +344,8 @@ void VideoPlayer::onPositionChanged(qint64 pts) {
     return;
   }
 
-  // 检查 pts 变化是否足够大以至于需要更新UI
-  // 只有当时间变化超过100ms或者是显示覆盖栏时才更新进度条
+  // 检查 pts 变化是否足够大以至于需要更新 UI
+  // 只有当时间变化超过 100ms 或者是显示覆盖栏时才更新进度条
   bool needUpdate = showOverlayBar || abs(currentPts - pts) > 100;
 
   currentPts = pts;
