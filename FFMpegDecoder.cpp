@@ -320,6 +320,7 @@ void FFMpegDecoder::videoDecodeLoop() {
           if (m_videoTrackIndex == -1)
             break;
         }
+
         // 暂停时等待
         if (m_pause) {
           std::unique_lock<std::mutex> lk(m_mutex);
@@ -328,7 +329,8 @@ void FFMpegDecoder::videoDecodeLoop() {
             break;
           playback_start_time = clock::now();
         }
-        // 跳转时等待
+
+        // 跳转时处理
         if (m_seeking) {
           int64_t ts = m_seekTarget * (AV_TIME_BASE / 1000);
           av_seek_frame(fmt_ctx.get(), -1, ts, AVSEEK_FLAG_BACKWARD);
@@ -345,6 +347,7 @@ void FFMpegDecoder::videoDecodeLoop() {
           }
           continue;
         }
+
         // 读取视频帧
         if (av_read_frame(fmt_ctx.get(), pkt.get()) < 0) {
           m_eof = true;
@@ -360,22 +363,23 @@ void FFMpegDecoder::videoDecodeLoop() {
           }
           continue;
         }
-        // 判断是否为视频流
-        if (pkt->stream_index != vid_idx) {
+
+        // 判断是否为视频流，或是否在跳转中（合并条件检查）
+        if (pkt->stream_index != vid_idx || m_seeking) {
           av_packet_unref(pkt.get());
           continue;
         }
-        // 跳转时等待
-        if (m_seeking) {
-          av_packet_unref(pkt.get());
-          continue;
-        }
+
         // 发送视频帧到解码器
         avcodec_send_packet(vctx.get(), pkt.get());
+
         // 接收解码后的视频帧
-        while (avcodec_receive_frame(vctx.get(), frame.get()) == 0) {
-          if (m_seeking)
+        while (!m_stop && !m_seeking &&
+               avcodec_receive_frame(vctx.get(), frame.get()) == 0) {
+          // 提前检查状态变化
+          if (m_stop || m_seeking)
             break;
+
           int64_t pts = frame->best_effort_timestamp;
           if (pts == AV_NOPTS_VALUE)
             pts = frame->pts;
@@ -384,12 +388,14 @@ void FFMpegDecoder::videoDecodeLoop() {
           int64_t ms = pts * vtime_base.num * 1000LL / vtime_base.den;
           qint64 audioClock = m_audioClockMs.load();
           qint64 diff = ms - audioClock;
+
           // 判断当前是否有音频轨道
-          bool hasAudio = true;
+          bool hasAudio = false;
           {
             std::lock_guard<std::mutex> lk(m_mutex);
             hasAudio = (m_audioTrackIndex != -1);
           }
+
           // 计算自适应丢帧/等待阈值（如帧间隔的2倍，最小10ms最大80ms）
           int frame_interval = 40; // 默认25fps
           if (vctx->framerate.num && vctx->framerate.den) {
@@ -397,35 +403,55 @@ void FFMpegDecoder::videoDecodeLoop() {
             frame_interval = std::max(10, std::min(frame_interval, 80));
           }
           int max_wait = frame_interval * 2;
+
+          // 音视频同步处理
           if (hasAudio && audioClock > 0) {
             // 音画同步：视频快于音频时等待，慢于音频时丢帧
             if (diff > frame_interval) {
+              // 视频领先音频，需要等待
               int waited = 0;
+              // 增加状态检查，减少不必要的睡眠
               while (diff > 5 && waited < max_wait && !m_stop && !m_pause &&
                      !m_seeking) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(2));
                 waited += 2;
+                // 更新时钟差值
                 audioClock = m_audioClockMs.load();
                 diff = ms - audioClock;
+
+                // 检查状态变化
+                if (m_stop || m_seeking || m_pause)
+                  break;
               }
+
+              // 如果状态已改变或仍需丢帧
+              if (m_stop || m_seeking || m_pause)
+                break;
               if (diff > frame_interval) {
-                qWarning() << "[Sync] Drop video frame: video ahead (diff ="
-                           << diff << "ms, video =" << ms
-                           << ", audio =" << audioClock << ")";
-                std::this_thread::sleep_for(std::chrono::milliseconds(2));
+                if (!m_stop && !m_seeking) {
+                  qWarning()
+                      << "[Sync] Drop video frame: video ahead (diff =" << diff
+                      << "ms, video =" << ms << ", audio =" << audioClock
+                      << ")";
+                }
                 continue;
               }
             } else if (diff < -frame_interval * 6) { // 允许最大音画滞后
-              qWarning() << "[Sync] Drop video frame: video lags (diff ="
-                         << diff << "ms, video =" << ms
-                         << ", audio =" << audioClock << ")";
+              // 视频落后太多，丢帧追赶
+              if (!m_stop && !m_seeking) {
+                qWarning() << "[Sync] Drop video frame: video lags (diff ="
+                           << diff << "ms, video =" << ms
+                           << ", audio =" << audioClock << ")";
+              }
               continue;
             }
           } else if (!hasAudio) {
             // 无音频轨道时，按 wall clock 推进
             static qint64 last_video_pts = 0;
             static auto last_wall_clock = clock::now();
+
             if (last_video_pts == 0 || ms < last_video_pts) {
+              // 重置时钟
               last_video_pts = ms;
               last_wall_clock = clock::now();
             } else {
@@ -435,14 +461,24 @@ void FFMpegDecoder::videoDecodeLoop() {
                   std::chrono::duration_cast<std::chrono::milliseconds>(
                       now - last_wall_clock)
                       .count();
-              if (elapsed < pts_diff) {
+
+              // 状态检查
+              if (!m_stop && !m_seeking && !m_pause && elapsed < pts_diff) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(
                     static_cast<int>(pts_diff - elapsed)));
               }
-              last_video_pts = ms;
-              last_wall_clock = clock::now();
+
+              // 更新时钟
+              if (!m_stop && !m_seeking) {
+                last_video_pts = ms;
+                last_wall_clock = clock::now();
+              }
             }
           }
+
+          // 再次检查状态
+          if (m_stop || m_seeking)
+            break;
           // 初始化 SwsContext
           if (!sws_ctx || sws_src_pix_fmt != frame->format ||
               frame->width != vwidth || frame->height != vheight) {
@@ -512,6 +548,10 @@ void FFMpegDecoder::videoDecodeLoop() {
 }
 
 void FFMpegDecoder::audioDecodeLoop() {
+  // 检查停止状态
+  if (m_stop)
+    return;
+
   AVFormatContext *raw_fmt_ctx = nullptr;
   AVDictionary *opts = nullptr;
   av_dict_set(&opts, "probe_size", "1048576", 0);
@@ -599,6 +639,10 @@ void FFMpegDecoder::audioDecodeLoop() {
   int64_t first_audio_pts = AV_NOPTS_VALUE;
   bool first_audio_frame = true;
   while (!m_stop) {
+    // 状态预检查
+    bool stateChanged = false;
+
+    // 暂停处理
     if (m_pause) {
       std::unique_lock<std::mutex> lk(m_mutex);
       m_cond.wait(lk, [&] { return m_stop || !m_pause || m_seeking; });
@@ -607,7 +651,10 @@ void FFMpegDecoder::audioDecodeLoop() {
       audio_playback_start_time = clock::now();
       first_audio_pts = AV_NOPTS_VALUE;
       first_audio_frame = true;
+      stateChanged = true;
     }
+
+    // 跳转处理
     if (m_seeking) {
       int64_t ts = m_seekTarget * (AV_TIME_BASE / 1000);
       av_seek_frame(fmt_ctx.get(), -1, ts, AVSEEK_FLAG_BACKWARD);
@@ -624,8 +671,13 @@ void FFMpegDecoder::audioDecodeLoop() {
           m_seeking = false;
         }
       }
+      stateChanged = true;
       continue;
     }
+
+    // 如果状态发生变化，重新检查循环条件
+    if (stateChanged)
+      continue;
     // 只处理当前选中的音轨
     int curAid = -1;
     bool isSilent = false;
@@ -665,52 +717,69 @@ void FFMpegDecoder::audioDecodeLoop() {
       continue;
     }
     avcodec_send_packet(actx.get(), pkt.get());
-    while (avcodec_receive_frame(actx.get(), frame.get()) == 0) {
-      if (m_seeking)
-        break;
-      if (frame->nb_samples == 0) {
+    while (!m_stop && !m_seeking &&
+           avcodec_receive_frame(actx.get(), frame.get()) == 0) {
+      // 提前检查状态变化和空帧
+      if (m_stop || m_seeking || frame->nb_samples == 0)
         continue;
-      }
-      int64_t pts = frame->pts;
-      if (pts == AV_NOPTS_VALUE)
-        pts = frame->best_effort_timestamp;
-      if (pts == AV_NOPTS_VALUE)
-        pts = 0;
+
+      // 简化PTS处理逻辑
+      int64_t pts = frame->pts != AV_NOPTS_VALUE
+                        ? frame->pts
+                        : (frame->best_effort_timestamp != AV_NOPTS_VALUE
+                               ? frame->best_effort_timestamp
+                               : 0);
+
       int64_t ms = pts * atime_base.num * 1000LL / atime_base.den;
-      if (ms < 0) {
+      if (ms < 0)
         continue;
-      }
+
+      // 更新音频时钟
       m_audioClockMs.store(ms);
+
+      // 音频同步常量
       static double audio_drift_threshold = 0.005;
       static double audio_diff_avg_coef = 0.98;
       static double audio_diff_threshold = 0.03;
       static double audio_diff_avg = 0.0;
+
+      // 第一帧处理
       if (first_audio_frame) {
         audio_playback_start_time = clock::now();
         first_audio_pts = ms;
         first_audio_frame = false;
       } else {
+        // 计算音频播放与时钟的差异
         int64_t elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
                               clock::now() - audio_playback_start_time)
                               .count();
         double diff = (ms - first_audio_pts) - elapsed;
+
+        // 更新平均差异（仅在合理范围内）
         if (std::abs(diff) < 500) {
           audio_diff_avg = audio_diff_avg * audio_diff_avg_coef +
                            diff * (1.0 - audio_diff_avg_coef);
         }
+
+        // 动态计算同步阈值
         double sync_threshold = std::max(
             5.0, std::min(audio_diff_threshold * elapsed * 0.001, 30.0));
+
+        // 检查是否需要同步调整
         if (std::abs(diff) > sync_threshold) {
-          if (diff > 0) {
+          // 音频领先于时钟，等待
+          if (diff > 0 && !m_stop && !m_seeking) {
             double delay = std::min(diff * 0.85, 40.0);
             std::this_thread::sleep_for(
                 std::chrono::milliseconds(static_cast<int>(delay)));
-          } else {
-            if (diff < -200) {
-              continue;
-            }
+          }
+          // 音频落后太多，丢弃帧
+          else if (diff < -200) {
+            continue;
           }
         }
+
+        // 处理长期漂移
         if (std::abs(audio_diff_avg) > audio_drift_threshold) {
           auto adjustment =
               std::chrono::milliseconds(static_cast<int>(audio_diff_avg * 0.6));
@@ -718,6 +787,10 @@ void FFMpegDecoder::audioDecodeLoop() {
           audio_diff_avg *= 0.3;
         }
       }
+
+      // 再次检查状态
+      if (m_stop || m_seeking)
+        break;
       int out_nb = av_rescale_rnd(
           swr_get_delay(swr_ctx, actx->sample_rate) + frame->nb_samples,
           OUT_SAMPLE_RATE, actx->sample_rate, AV_ROUND_UP);
