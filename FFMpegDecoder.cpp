@@ -1,9 +1,9 @@
 #include "FFMpegDecoder.h"
 #include "qdebug.h"
+#include <QSharedPointer>
 #include <QtDebug>
 #include <chrono>
 #include <memory>
-#include <QSharedPointer>
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -66,7 +66,7 @@ static const AVSampleFormat OUT_SAMPLE_FMT = AV_SAMPLE_FMT_S16;
 FFMpegDecoder::FFMpegDecoder(QObject *parent) : QObject(parent) {
   // 注册所有的 FFMpeg 组件
   av_register_all();
-  
+
   // 注册 QSharedPointer<QImage> 类型，以便在信号槽中使用
   qRegisterMetaType<QSharedPointer<QImage>>("QSharedPointer<QImage>");
 }
@@ -223,652 +223,567 @@ void FFMpegDecoder::videoDecodeLoop() {
     }
     if (m_videoTrackIndex >= static_cast<int>(m_videoStreamIndices.size()))
       m_videoTrackIndex = m_videoStreamIndices.empty() ? -1 : 0;
-    // 主循环：根据轨道类型切换
+
+    // 简化为主循环：统一处理空轨道和视频轨道
+    qint64 duration_ms =
+        fmt_ctx->duration >= 0 ? fmt_ctx->duration / (AV_TIME_BASE / 1000) : 0;
+    emit durationChanged(duration_ms);
+
+    // 资源初始化（移出循环）
+    AVCodec *vcodec = nullptr;
+    AVCodecContextPtr vctx;
+    int vwidth = 0, vheight = 0;
+    AVRational vtime_base = {0, 1};
+    int sws_src_pix_fmt = -1;
+    SwsContext *sws_ctx = nullptr;
+    int rgb_stride = 0;
+    uint8_t *rgb_buf = nullptr;
+    int rgb_buf_size = 0;
+    AVPacketPtr pkt = make_avpacket();
+    AVFramePtr frame = make_avframe();
+    using clock = std::chrono::steady_clock;
+    clock::time_point playback_start_time = clock::now();
+
     while (!m_stop) {
+      // 获取当前视频轨道索引
       int vid_idx = -1;
       {
         std::lock_guard<std::mutex> lk(m_mutex);
-        if (m_videoTrackIndex == -1)
-          vid_idx = -1;
-        else if (m_videoTrackIndex >= 0 &&
-                 m_videoTrackIndex <
-                     static_cast<int>(m_videoStreamIndices.size()))
+        if (m_videoTrackIndex >= 0 &&
+            m_videoTrackIndex < static_cast<int>(m_videoStreamIndices.size()))
           vid_idx = m_videoStreamIndices[m_videoTrackIndex];
       }
-      if (vid_idx < 0) {
-        // 空轨道：只同步音频进度，并清空画面
-        emit frameReady(QSharedPointer<QImage>());
-        while (!m_stop) {
-          // 动态检测是否切回有轨道
-          {
-            std::lock_guard<std::mutex> lk(m_mutex);
-            if (m_videoTrackIndex != -1)
-              break;
-          }
-          if (m_stop)
-            break;
-          if (m_pause) {
-            std::unique_lock<std::mutex> lk(m_mutex);
-            m_cond.wait(lk, [&] { return m_stop || !m_pause || m_seeking; });
-            if (m_stop)
-              break;
-          }
-          if (m_seeking) {
-            // seek 时重置音频时钟，保证 positionChanged 正确推进
-            m_audioClockMs.store(m_seekTarget);
-            std::lock_guard<std::mutex> lk(m_mutex);
-            m_videoSeekHandled = true;
-            if (m_audioSeekHandled)
-              m_seeking = false;
-            continue;
-          }
-          emit positionChanged(m_audioClockMs.load());
-          // 使用单次较长的休眠替代多次短休眠，减少 CPU 唤醒次数
-          if (!m_stop) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(40));
-          }
-        }
-        if (m_stop)
-          break;
-        continue; // 重新判断轨道类型
-      }
-      // 获取视频解码器
-      AVCodec *vcodec = find_decoder(
-          fmt_ctx->streams[vid_idx]->codecpar->codec_id, AVMEDIA_TYPE_VIDEO);
-      if (!vcodec) {
-        qWarning() << "Video decoder not found";
-        emit errorOccurred(tr("未找到视频解码器"));
-        break;
-      }
-      AVCodecContextPtr vctx = make_avcodec_ctx(vcodec);
-      if (!vctx) {
-        qWarning() << "Failed to allocate video decoder context";
-        emit errorOccurred(tr("无法分配视频解码器上下文"));
-        break;
-      }
-      if (avcodec_parameters_to_context(
-              vctx.get(), fmt_ctx->streams[vid_idx]->codecpar) < 0) {
-        qWarning() << "Failed to copy video decoder parameters";
-        emit errorOccurred(tr("无法复制视频解码器参数"));
-        break;
-      }
-      if (avcodec_open2(vctx.get(), vcodec, nullptr) < 0) {
-        qWarning() << "Failed to open video decoder";
-        emit errorOccurred(tr("无法打开视频解码器"));
-        break;
-      }
-      int vwidth = vctx->width;
-      int vheight = vctx->height;
-      AVRational vtime_base = fmt_ctx->streams[vid_idx]->time_base;
-      int sws_src_pix_fmt = -1;
-      SwsContext *sws_ctx = nullptr;
-      int rgb_stride = vwidth * 3;
-      uint8_t *rgb_buf = nullptr;
-      int rgb_buf_size = 0;
-      if (vwidth && vheight) {
-        rgb_buf_size =
-            av_image_get_buffer_size(AV_PIX_FMT_RGB24, vwidth, vheight, 1);
-        rgb_buf = (uint8_t *)av_malloc(rgb_buf_size);
-      }
-      AVPacketPtr pkt = make_avpacket();
-      AVFramePtr frame = make_avframe();
-      using clock = std::chrono::steady_clock;
-      clock::time_point playback_start_time;
-      qint64 duration_ms = fmt_ctx->duration >= 0
-                               ? fmt_ctx->duration / (AV_TIME_BASE / 1000)
-                               : 0;
-      emit durationChanged(duration_ms);
-      // 解码循环
-      while (!m_stop) {
-        // 动态检测是否切换到空轨道
-        {
-          std::lock_guard<std::mutex> lk(m_mutex);
-          if (m_videoTrackIndex == -1)
-            break;
-        }
 
-        // 暂停时等待
+      // 处理空轨道
+      if (vid_idx < 0) {
+        // 清空画面
+        emit frameReady(QSharedPointer<QImage>());
+
+        // 暂停或等待状态变化
         if (m_pause) {
           std::unique_lock<std::mutex> lk(m_mutex);
-          m_cond.wait(lk, [&] { return m_stop || !m_pause || m_seeking; });
+          m_cond.wait(lk, [&] {
+            return m_stop || !m_pause || m_seeking || m_videoTrackIndex != -1;
+          });
           if (m_stop)
             break;
-          playback_start_time = clock::now();
         }
 
-        // 跳转时处理
+        // 处理 seek
         if (m_seeking) {
-          int64_t ts = m_seekTarget * (AV_TIME_BASE / 1000);
-          av_seek_frame(fmt_ctx.get(), -1, ts, AVSEEK_FLAG_BACKWARD);
-          avcodec_flush_buffers(vctx.get());
-          playback_start_time = clock::now();
-          av_packet_unref(pkt.get());
-          av_frame_unref(frame.get());
-          {
-            std::lock_guard<std::mutex> lk(m_mutex);
-            m_videoSeekHandled = true;
-            if (m_audioSeekHandled) {
-              m_seeking = false;
-            }
-          }
+          m_audioClockMs.store(m_seekTarget);
+          std::lock_guard<std::mutex> lk(m_mutex);
+          m_videoSeekHandled = true;
+          if (m_audioSeekHandled)
+            m_seeking = false;
           continue;
         }
 
-        // 读取视频帧
-        if (av_read_frame(fmt_ctx.get(), pkt.get()) < 0) {
-          m_eof = true;
-          std::unique_lock<std::mutex> lk(m_mutex);
-          m_cond.wait_for(lk, std::chrono::milliseconds(50), [&] {
-            return m_stop || m_seeking || m_eof == false;
-          }); // 增加等待时间，减少 CPU 轮询
-          if (m_stop)
-            break;
-          if (m_seeking) {
-            m_eof = false;
+        // 推进位置（基于音频时钟）
+        emit positionChanged(m_audioClockMs.load());
+        std::this_thread::sleep_for(std::chrono::milliseconds(40));
+        continue;
+      }
+
+      // 初始化/重置视频解码资源（如果轨道变化）
+      if (!vctx || vid_idx !=
+                       m_videoStreamIndices
+                           [m_videoTrackIndex]) { // 假设轨道变化时重新初始化
+        vcodec = find_decoder(fmt_ctx->streams[vid_idx]->codecpar->codec_id,
+                              AVMEDIA_TYPE_VIDEO);
+        if (!vcodec) {
+          qWarning() << "Video decoder not found";
+          emit errorOccurred(tr("未找到视频解码器"));
+          break;
+        }
+        vctx = make_avcodec_ctx(vcodec);
+        if (!vctx) {
+          qWarning() << "Failed to allocate video decoder context";
+          emit errorOccurred(tr("无法分配视频解码器上下文"));
+          break;
+        }
+        if (avcodec_parameters_to_context(
+                vctx.get(), fmt_ctx->streams[vid_idx]->codecpar) < 0) {
+          qWarning() << "Failed to copy video decoder parameters";
+          emit errorOccurred(tr("无法复制视频解码器参数"));
+          break;
+        }
+        if (avcodec_open2(vctx.get(), vcodec, nullptr) < 0) {
+          qWarning() << "Failed to open video decoder";
+          emit errorOccurred(tr("无法打开视频解码器"));
+          break;
+        }
+        vwidth = vctx->width;
+        vheight = vctx->height;
+        vtime_base = fmt_ctx->streams[vid_idx]->time_base;
+        if (sws_ctx)
+          sws_freeContext(sws_ctx);
+        sws_ctx = nullptr;
+        if (rgb_buf)
+          av_free(rgb_buf);
+        rgb_buf = nullptr;
+        rgb_buf_size = 0;
+        if (vwidth && vheight) {
+          rgb_buf_size =
+              av_image_get_buffer_size(AV_PIX_FMT_RGB24, vwidth, vheight, 1);
+          rgb_buf = (uint8_t *)av_malloc(rgb_buf_size);
+        }
+      }
+
+      // 暂停处理
+      if (m_pause) {
+        std::unique_lock<std::mutex> lk(m_mutex);
+        m_cond.wait(lk, [&] { return m_stop || !m_pause || m_seeking; });
+        if (m_stop)
+          break;
+        playback_start_time = clock::now();
+      }
+
+      // 跳转处理
+      if (m_seeking) {
+        int64_t ts = m_seekTarget * (AV_TIME_BASE / 1000);
+        av_seek_frame(fmt_ctx.get(), -1, ts, AVSEEK_FLAG_BACKWARD);
+        avcodec_flush_buffers(vctx.get());
+        playback_start_time = clock::now();
+        av_packet_unref(pkt.get());
+        av_frame_unref(frame.get());
+        {
+          std::lock_guard<std::mutex> lk(m_mutex);
+          m_videoSeekHandled = true;
+          if (m_audioSeekHandled)
+            m_seeking = false;
+        }
+        continue;
+      }
+
+      // 读取视频帧
+      if (av_read_frame(fmt_ctx.get(), pkt.get()) < 0) {
+        m_eof = true;
+        std::unique_lock<std::mutex> lk(m_mutex);
+        m_cond.wait_for(lk, std::chrono::milliseconds(50),
+                        [&] { return m_stop || m_seeking || m_eof == false; });
+        if (m_stop)
+          break;
+        if (m_seeking) {
+          m_eof = false;
+          continue;
+        }
+        continue;
+      }
+
+      // 判断是否为视频流
+      if (pkt->stream_index != vid_idx) {
+        av_packet_unref(pkt.get());
+        continue;
+      }
+
+      // 发送视频帧到解码器
+      avcodec_send_packet(vctx.get(), pkt.get());
+
+      // 接收解码后的视频帧
+      while (!m_stop && !m_seeking &&
+             avcodec_receive_frame(vctx.get(), frame.get()) == 0) {
+        int64_t pts = frame->best_effort_timestamp;
+        if (pts == AV_NOPTS_VALUE)
+          pts = frame->pts;
+        if (pts == AV_NOPTS_VALUE)
+          pts = 0;
+        int64_t ms = pts * vtime_base.num * 1000LL / vtime_base.den;
+        qint64 audioClock = m_audioClockMs.load();
+        qint64 diff = ms - audioClock;
+
+        bool hasAudio = (m_audioTrackIndex != -1);
+        int frame_interval = 40;
+        if (vctx->framerate.num && vctx->framerate.den) {
+          frame_interval = 1000 * vctx->framerate.den / vctx->framerate.num;
+          frame_interval = std::max(10, std::min(frame_interval, 80));
+        }
+        int max_wait = frame_interval * 2;
+
+        if (hasAudio && audioClock > 0) {
+          if (diff > frame_interval) {
+            int waited = 0;
+            if (diff > 20 && waited < max_wait && !m_stop && !m_pause &&
+                !m_seeking) {
+              int sleep_time = static_cast<int>(diff * 0.8);
+              std::this_thread::sleep_for(
+                  std::chrono::milliseconds(sleep_time));
+              waited += sleep_time;
+              audioClock = m_audioClockMs.load();
+              diff = ms - audioClock;
+            }
+            while (diff > 5 && waited < max_wait && !m_stop && !m_pause &&
+                   !m_seeking) {
+              std::this_thread::sleep_for(std::chrono::milliseconds(5));
+              waited += 5;
+              audioClock = m_audioClockMs.load();
+              diff = ms - audioClock;
+            }
+            if (m_stop || m_seeking || m_pause)
+              break;
+            if (diff > frame_interval)
+              continue;
+          } else if (diff < -frame_interval * 6) {
             continue;
           }
-          continue;
-        }
-
-        // 判断是否为视频流，或是否在跳转中（合并条件检查）
-        if (pkt->stream_index != vid_idx || m_seeking) {
-          av_packet_unref(pkt.get());
-          continue;
-        }
-
-        // 发送视频帧到解码器
-        avcodec_send_packet(vctx.get(), pkt.get());
-
-        // 接收解码后的视频帧
-        while (!m_stop && !m_seeking &&
-               avcodec_receive_frame(vctx.get(), frame.get()) == 0) {
-          // 提前检查状态变化
-          if (m_stop || m_seeking)
-            break;
-
-          int64_t pts = frame->best_effort_timestamp;
-          if (pts == AV_NOPTS_VALUE)
-            pts = frame->pts;
-          if (pts == AV_NOPTS_VALUE)
-            pts = 0;
-          int64_t ms = pts * vtime_base.num * 1000LL / vtime_base.den;
-          qint64 audioClock = m_audioClockMs.load();
-          qint64 diff = ms - audioClock;
-
-          // 判断当前是否有音频轨道
-          bool hasAudio = false;
-          {
-            std::lock_guard<std::mutex> lk(m_mutex);
-            hasAudio = (m_audioTrackIndex != -1);
-          }
-
-          // 计算自适应丢帧/等待阈值（如帧间隔的 2 倍，最小 10ms 最大 80ms）
-          int frame_interval = 40; // 默认 25fps
-          if (vctx->framerate.num && vctx->framerate.den) {
-            frame_interval = 1000 * vctx->framerate.den / vctx->framerate.num;
-            frame_interval = std::max(10, std::min(frame_interval, 80));
-          }
-          int max_wait = frame_interval * 2;
-
-          // 音视频同步处理
-          if (hasAudio && audioClock > 0) {
-            // 音画同步：视频快于音频时等待，慢于音频时丢帧
-            if (diff > frame_interval) {
-              // 视频领先音频，需要等待
-              int waited = 0;
-              // 增加状态检查，减少不必要的睡眠
-              // 如果差值较大，直接睡眠大部分时间，减少 CPU 唤醒
-              if (diff > 20 && waited < max_wait && !m_stop && !m_pause && !m_seeking) {
-                int sleep_time = static_cast<int>(diff * 0.8); // 睡眠差值的 80%
-                std::this_thread::sleep_for(std::chrono::milliseconds(sleep_time));
-                waited += sleep_time;
-                
-                // 更新时钟差值
-                audioClock = m_audioClockMs.load();
-                diff = ms - audioClock;
-              }
-
-              // 精细调整剩余差值
-              while (diff > 5 && waited < max_wait && !m_stop && !m_pause && !m_seeking) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(5)); // 增加睡眠间隔
-                waited += 5;
-                // 更新时钟差值
-                audioClock = m_audioClockMs.load();
-                diff = ms - audioClock;
-
-                // 检查状态变化
-                if (m_stop || m_seeking || m_pause)
-                  break;
-              }
-
-              // 如果状态已改变或仍需丢帧
-              if (m_stop || m_seeking || m_pause)
-                break;
-              if (diff > frame_interval) {
-                if (!m_stop && !m_seeking) {
-                  qWarning()
-                      << "[Sync] Drop video frame: video ahead (diff =" << diff
-                      << "ms, video =" << ms << ", audio =" << audioClock
-                      << ")";
-                }
-                continue;
-              }
-            } else if (diff < -frame_interval * 6) { // 允许最大音画滞后
-              // 视频落后太多，丢帧追赶
-              if (!m_stop && !m_seeking) {
-                qWarning() << "[Sync] Drop video frame: video lags (diff ="
-                           << diff << "ms, video =" << ms
-                           << ", audio =" << audioClock << ")";
-              }
-              continue;
+        } else if (!hasAudio) {
+          static qint64 last_video_pts = 0;
+          static auto last_wall_clock = clock::now();
+          if (last_video_pts == 0 || ms < last_video_pts) {
+            last_video_pts = ms;
+            last_wall_clock = clock::now();
+          } else {
+            qint64 pts_diff = ms - last_video_pts;
+            auto now = clock::now();
+            auto elapsed =
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    now - last_wall_clock)
+                    .count();
+            if (!m_stop && !m_seeking && !m_pause && elapsed < pts_diff) {
+              std::this_thread::sleep_for(std::chrono::milliseconds(
+                  static_cast<int>(pts_diff - elapsed)));
             }
-          } else if (!hasAudio) {
-            // 无音频轨道时，按 wall clock 推进
-            static qint64 last_video_pts = 0;
-            static auto last_wall_clock = clock::now();
-
-            if (last_video_pts == 0 || ms < last_video_pts) {
-              // 重置时钟
+            if (!m_stop && !m_seeking) {
               last_video_pts = ms;
               last_wall_clock = clock::now();
-            } else {
-              qint64 pts_diff = ms - last_video_pts;
-              auto now = clock::now();
-              auto elapsed =
-                  std::chrono::duration_cast<std::chrono::milliseconds>(
-                      now - last_wall_clock)
-                      .count();
-
-              // 状态检查
-              if (!m_stop && !m_seeking && !m_pause && elapsed < pts_diff) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(
-                    static_cast<int>(pts_diff - elapsed)));
-              }
-
-              // 更新时钟
-              if (!m_stop && !m_seeking) {
-                last_video_pts = ms;
-                last_wall_clock = clock::now();
-              }
             }
           }
-
-          // 再次检查状态
-          if (m_stop || m_seeking)
-            break;
-          // 初始化 SwsContext
-          if (!sws_ctx || sws_src_pix_fmt != frame->format ||
-              frame->width != vwidth || frame->height != vheight) {
-            if (sws_ctx)
-              sws_freeContext(sws_ctx);
-            vwidth = frame->width;
-            vheight = frame->height;
-            rgb_stride = vwidth * 3;
-            int new_buf_size =
-                av_image_get_buffer_size(AV_PIX_FMT_RGB24, vwidth, vheight, 1);
-            if (new_buf_size != rgb_buf_size) {
-              if (rgb_buf)
-                av_free(rgb_buf);
-              rgb_buf = (uint8_t *)av_malloc(new_buf_size);
-              rgb_buf_size = new_buf_size;
-            }
-            sws_ctx = sws_getCachedContext(
-                nullptr, vwidth, vheight, (AVPixelFormat)frame->format, vwidth,
-                vheight, AV_PIX_FMT_RGB24, SWS_BILINEAR, nullptr, nullptr,
-                nullptr);
-            sws_src_pix_fmt = frame->format;
-            if (!sws_ctx) {
-              qWarning() << "Failed to initialize sws context, format:"
-                         << frame->format;
-              continue;
-            }
-          }
-          // 确保 RGB 缓冲区已正确分配
-          if (!rgb_buf) {
-            // qWarning() << "RGB buffer not allocated, allocating now";
-            rgb_buf_size = av_image_get_buffer_size(AV_PIX_FMT_RGB24, vwidth, vheight, 1);
-            rgb_buf = (uint8_t *)av_malloc(rgb_buf_size);
-            if (!rgb_buf) {
-              qWarning() << "Failed to allocate RGB buffer";
-              continue;
-            }
-          }
-          
-          // 转换视频帧格式为 RGB24
-          uint8_t *dst[1] = {rgb_buf};
-          int dst_linesize[1] = {rgb_stride};
-          sws_scale(sws_ctx, frame->data, frame->linesize, 0, vheight, dst,
-                    dst_linesize);
-          
-          // 使用共享的缓冲区创建 QImage
-          struct RGBBufferDeleter {
-            void operator()(QImage* img) {
-              if (img) {
-                delete img;
-              }
-            }
-          };
-
-          QSharedPointer<QImage> imgPtr;
-          if (rgb_buf) {
-            // 直接使用 rgb_buf 创建 QImage 并设置自定义删除器来释放内存
-            QImage* rawImg = new QImage(rgb_buf, vwidth, vheight, rgb_stride, 
-                                      QImage::Format_RGB888, 
-                                      [](void* buf) { av_free(buf); }, 
-                                      rgb_buf);
-            
-            if (!rawImg->isNull()) {
-              // 成功创建图像，使用自定义删除器包装到 QSharedPointer
-              imgPtr = QSharedPointer<QImage>(rawImg, RGBBufferDeleter());
-              // 将 rgb_buf 设为 nullptr，因为现在由 QImage 负责管理
-              rgb_buf = nullptr;
-            } else {
-              // 创建失败，回退到复制模式
-              delete rawImg;
-              qWarning() << "QImage isNull after construction, fallback to buffer copy";
-              QImage tempImg(rgb_buf, vwidth, vheight, rgb_stride, QImage::Format_RGB888);
-              imgPtr = QSharedPointer<QImage>(new QImage(tempImg.copy()));
-            }
-          }
-          emit frameReady(imgPtr);
-          emit positionChanged(ms);
         }
-        av_packet_unref(pkt.get());
-      }
-      if (rgb_buf)
-        av_free(rgb_buf);
-      if (sws_ctx)
-        sws_freeContext(sws_ctx);
-      // 检查是否切换到空轨道，若是则 continue 外层
-      // while，重新打开文件（如有必要）
-      {
-        std::lock_guard<std::mutex> lk(m_mutex);
-        if (m_videoTrackIndex == -1 && !m_stop) {
-          continue;
+
+        if (m_stop || m_seeking)
+          break;
+
+        // 初始化 SwsContext
+        if (!sws_ctx || sws_src_pix_fmt != frame->format ||
+            frame->width != vwidth || frame->height != vheight) {
+          if (sws_ctx)
+            sws_freeContext(sws_ctx);
+          vwidth = frame->width;
+          vheight = frame->height;
+          rgb_stride = vwidth * 3;
+          int new_buf_size =
+              av_image_get_buffer_size(AV_PIX_FMT_RGB24, vwidth, vheight, 1);
+          if (new_buf_size != rgb_buf_size) {
+            if (rgb_buf)
+              av_free(rgb_buf);
+            rgb_buf = (uint8_t *)av_malloc(new_buf_size);
+            rgb_buf_size = new_buf_size;
+          }
+          sws_ctx = sws_getCachedContext(
+              nullptr, vwidth, vheight, (AVPixelFormat)frame->format, vwidth,
+              vheight, AV_PIX_FMT_RGB24, SWS_BILINEAR, nullptr, nullptr,
+              nullptr);
+          sws_src_pix_fmt = frame->format;
+          if (!sws_ctx)
+            continue;
         }
+
+        if (!rgb_buf) {
+          rgb_buf_size =
+              av_image_get_buffer_size(AV_PIX_FMT_RGB24, vwidth, vheight, 1);
+          rgb_buf = (uint8_t *)av_malloc(rgb_buf_size);
+          if (!rgb_buf)
+            continue;
+        }
+
+        // 转换格式
+        uint8_t *dst[1] = {rgb_buf};
+        int dst_linesize[1] = {rgb_stride};
+        sws_scale(sws_ctx, frame->data, frame->linesize, 0, vheight, dst,
+                  dst_linesize);
+
+        // 创建 QImage
+        struct RGBBufferDeleter {
+          void operator()(QImage *img) { delete img; }
+        };
+        QSharedPointer<QImage> imgPtr;
+        if (rgb_buf) {
+          QImage *rawImg = new QImage(
+              rgb_buf, vwidth, vheight, rgb_stride, QImage::Format_RGB888,
+              [](void *buf) { av_free(buf); }, rgb_buf);
+          if (!rawImg->isNull()) {
+            imgPtr = QSharedPointer<QImage>(rawImg, RGBBufferDeleter());
+            rgb_buf = nullptr;
+          } else {
+            delete rawImg;
+            QImage tempImg(rgb_buf, vwidth, vheight, rgb_stride,
+                           QImage::Format_RGB888);
+            imgPtr = QSharedPointer<QImage>(new QImage(tempImg.copy()));
+          }
+        }
+        emit frameReady(imgPtr);
+        emit positionChanged(ms);
       }
-      break; // 退出内层 while，重新打开文件（如有必要）
+      av_packet_unref(pkt.get());
     }
-    break; // 正常退出外层 while
+
+    // 清理资源
+    if (rgb_buf)
+      av_free(rgb_buf);
+    if (sws_ctx)
+      sws_freeContext(sws_ctx);
   }
 }
 
 void FFMpegDecoder::audioDecodeLoop() {
-  // 检查停止状态
-  if (m_stop)
-    return;
-
-  AVFormatContext *raw_fmt_ctx = nullptr;
-  AVDictionary *opts = nullptr;
-  av_dict_set(&opts, "probe_size", "1048576", 0);
-  av_dict_set(&opts, "analyzeduration", "1000000", 0);
-  if (avformat_open_input(&raw_fmt_ctx, m_path.toUtf8().constData(), nullptr,
-                          &opts) < 0) {
-    qWarning() << "Failed to open input file:" << m_path;
-    emit errorOccurred(tr("无法打开文件: %1").arg(m_path));
-    av_dict_free(&opts);
-    return;
-  }
-  av_dict_free(&opts);
-  AVFormatContextPtr fmt_ctx(raw_fmt_ctx);
-  if (avformat_find_stream_info(fmt_ctx.get(), nullptr) < 0) {
-    qWarning() << "Failed to get stream info";
-    emit errorOccurred(tr("无法获取媒体流信息"));
-    return;
-  }
-  // 收集所有音频流索引和名称
-  m_audioStreamIndices.clear();
-  m_audioStreamNames.clear();
-  for (unsigned i = 0; i < fmt_ctx->nb_streams; i++) {
-    AVCodecParameters *p = fmt_ctx->streams[i]->codecpar;
-    if (p->codec_type == AVMEDIA_TYPE_AUDIO) {
-      m_audioStreamIndices.push_back(i);
-      QString name = QString("Track %1").arg(m_audioStreamIndices.size());
-      if (fmt_ctx->streams[i]->metadata) {
-        AVDictionaryEntry *lang =
-            av_dict_get(fmt_ctx->streams[i]->metadata, "language", nullptr, 0);
-        if (lang && lang->value)
-          name += QString(" [%1]").arg(lang->value);
-      }
-      m_audioStreamNames.push_back(name);
-    }
-  }
-  if (m_audioTrackIndex >= static_cast<int>(m_audioStreamIndices.size()))
-    m_audioTrackIndex = m_audioStreamIndices.empty() ? -1 : 0;
-  // 循环解码音频帧
-  AVCodec *acodec =
-      find_decoder(fmt_ctx->streams[m_audioStreamIndices[m_audioTrackIndex]]
-                       ->codecpar->codec_id,
-                   AVMEDIA_TYPE_AUDIO);
-  AVCodecContextPtr actx = make_avcodec_ctx(acodec);
-  if (!actx) {
-    qWarning() << "Failed to allocate audio decoder context";
-    emit errorOccurred(tr("无法分配音频解码器上下文"));
-    return;
-  }
-  // 复制音频解码器参数
-  if (avcodec_parameters_to_context(
-          actx.get(),
-          fmt_ctx->streams[m_audioStreamIndices[m_audioTrackIndex]]->codecpar) <
-      0) {
-    qWarning() << "Failed to copy audio decoder parameters";
-    emit errorOccurred(tr("无法复制音频解码器参数"));
-    return;
-  }
-  // 打开音频解码器
-  if (avcodec_open2(actx.get(), acodec, nullptr) < 0) {
-    qWarning() << "Failed to open audio decoder";
-    emit errorOccurred(tr("无法打开音频解码器"));
-    return;
-  }
-  AVRational atime_base =
-      fmt_ctx->streams[m_audioStreamIndices[m_audioTrackIndex]]->time_base;
-  SwrContext *swr_ctx = nullptr;
-  if (actx->channel_layout == 0)
-    actx->channel_layout = av_get_default_channel_layout(actx->channels);
-  swr_ctx =
-      swr_alloc_set_opts(nullptr, av_get_default_channel_layout(OUT_CHANNELS),
-                         OUT_SAMPLE_FMT, OUT_SAMPLE_RATE, actx->channel_layout,
-                         actx->sample_fmt, actx->sample_rate, 0, nullptr);
-  if (!swr_ctx || swr_init(swr_ctx) < 0) {
-    qWarning() << "Failed to initialize audio resample context";
-    emit errorOccurred(tr("音频重采样初始化失败"));
-    swr_free(&swr_ctx);
-    return;
-  }
-  AVPacketPtr pkt = make_avpacket();
-  AVFramePtr frame = make_avframe();
-  uint8_t **out_buf = nullptr;
-  int out_buf_samples = 0;
-  using clock = std::chrono::steady_clock;
-  clock::time_point audio_playback_start_time;
-  int64_t first_audio_pts = AV_NOPTS_VALUE;
-  bool first_audio_frame = true;
   while (!m_stop) {
-    // 状态预检查
-    bool stateChanged = false;
-
-    // 暂停处理
-    if (m_pause) {
-      std::unique_lock<std::mutex> lk(m_mutex);
-      m_cond.wait(lk, [&] { return m_stop || !m_pause || m_seeking; });
-      if (m_stop)
-        break;
-      audio_playback_start_time = clock::now();
-      first_audio_pts = AV_NOPTS_VALUE;
-      first_audio_frame = true;
-      stateChanged = true;
+    // 打开输入文件
+    AVFormatContext *raw_fmt_ctx = nullptr;
+    AVDictionary *opts = nullptr;
+    av_dict_set(&opts, "probe_size", "1048576", 0);
+    av_dict_set(&opts, "analyzeduration", "1000000", 0);
+    if (avformat_open_input(&raw_fmt_ctx, m_path.toUtf8().constData(), nullptr,
+                            &opts) < 0) {
+      qWarning() << "Failed to open input file:" << m_path;
+      emit errorOccurred(tr("无法打开文件: %1").arg(m_path));
+      av_dict_free(&opts);
+      return;
+    }
+    av_dict_free(&opts);
+    AVFormatContextPtr fmt_ctx(raw_fmt_ctx);
+    if (avformat_find_stream_info(fmt_ctx.get(), nullptr) < 0) {
+      qWarning() << "Failed to get stream info";
+      emit errorOccurred(tr("无法获取媒体流信息"));
+      return;
     }
 
-    // 跳转处理
-    if (m_seeking) {
-      int64_t ts = m_seekTarget * (AV_TIME_BASE / 1000);
-      av_seek_frame(fmt_ctx.get(), -1, ts, AVSEEK_FLAG_BACKWARD);
-      avcodec_flush_buffers(actx.get());
-      audio_playback_start_time = clock::now();
-      first_audio_pts = AV_NOPTS_VALUE;
-      first_audio_frame = true;
-      av_packet_unref(pkt.get());
-      av_frame_unref(frame.get());
+    // 收集音频流信息
+    m_audioStreamIndices.clear();
+    m_audioStreamNames.clear();
+    for (unsigned i = 0; i < fmt_ctx->nb_streams; i++) {
+      AVCodecParameters *p = fmt_ctx->streams[i]->codecpar;
+      if (p->codec_type == AVMEDIA_TYPE_AUDIO) {
+        m_audioStreamIndices.push_back(i);
+        QString name = QString("Track %1").arg(m_audioStreamIndices.size());
+        if (fmt_ctx->streams[i]->metadata) {
+          AVDictionaryEntry *lang = av_dict_get(fmt_ctx->streams[i]->metadata,
+                                                "language", nullptr, 0);
+          if (lang && lang->value)
+            name += QString(" [%1]").arg(lang->value);
+        }
+        m_audioStreamNames.push_back(name);
+      }
+    }
+    if (m_audioTrackIndex >= static_cast<int>(m_audioStreamIndices.size()))
+      m_audioTrackIndex = m_audioStreamIndices.empty() ? -1 : 0;
+
+    // 资源初始化（移出循环）
+    AVCodec *acodec = nullptr;
+    AVCodecContextPtr actx;
+    AVRational atime_base = {0, 1};
+    SwrContext *swr_ctx = nullptr;
+    AVPacketPtr pkt = make_avpacket();
+    AVFramePtr frame = make_avframe();
+    uint8_t **out_buf = nullptr;
+    int out_buf_samples = 0;
+    using clock = std::chrono::steady_clock;
+    clock::time_point audio_playback_start_time = clock::now();
+    int64_t first_audio_pts = AV_NOPTS_VALUE;
+    bool first_audio_frame = true;
+    double audio_diff_avg = 0.0;
+
+    while (!m_stop) {
+      // 获取当前音频轨道索引
+      int curAid = -1;
       {
         std::lock_guard<std::mutex> lk(m_mutex);
-        m_audioSeekHandled = true;
-        if (m_videoSeekHandled) {
-          m_seeking = false;
-        }
+        if (m_audioTrackIndex >= 0 &&
+            m_audioTrackIndex < static_cast<int>(m_audioStreamIndices.size()))
+          curAid = m_audioStreamIndices[m_audioTrackIndex];
       }
-      stateChanged = true;
-      continue;
-    }
 
-    // 如果状态发生变化，重新检查循环条件
-    if (stateChanged)
-      continue;
-    // 只处理当前选中的音轨
-    int curAid = -1;
-    bool isSilent = false;
-    {
-      std::lock_guard<std::mutex> lk(m_mutex);
-      if (m_audioTrackIndex == -1) {
-        isSilent = true;
-      } else if (m_audioTrackIndex >= 0 &&
-                 m_audioTrackIndex <
-                     static_cast<int>(m_audioStreamIndices.size())) {
-        curAid = m_audioStreamIndices[m_audioTrackIndex];
-      }
-    }
-    if (isSilent) {
-      // 静音：使用静态预分配的静音缓冲区，避免反复创建
-      static QByteArray silence(2048, 0);
-      emit audioReady(silence);
-      // 不再在静音时由音频线程 emit positionChanged，交由视频线程推进
-      // 使用单次较长的休眠替代多次短休眠，减少 CPU 唤醒次数
-      if (!m_stop) {
+      // 处理静音轨道
+      if (curAid < 0) {
+        static QByteArray silence(2048, 0);
+        emit audioReady(silence);
         std::this_thread::sleep_for(std::chrono::milliseconds(40));
-      }
-      continue;
-    }
-    if (av_read_frame(fmt_ctx.get(), pkt.get()) < 0) {
-      m_eof = true;
-      std::unique_lock<std::mutex> lk(m_mutex);
-      m_cond.wait_for(lk, std::chrono::milliseconds(50), [&] { 
-        return m_stop || m_seeking || m_eof == false; 
-      }); // 设置超时等待，减少 CPU 占用
-      if (m_stop)
-        break;
-      if (m_seeking) {
-        m_eof = false;
         continue;
       }
-      continue;
-    }
-    if (pkt->stream_index != curAid) {
-      av_packet_unref(pkt.get());
-      continue;
-    }
-    avcodec_send_packet(actx.get(), pkt.get());
-    while (!m_stop && !m_seeking &&
-           avcodec_receive_frame(actx.get(), frame.get()) == 0) {
-      // 提前检查状态变化和空帧
-      if (m_stop || m_seeking || frame->nb_samples == 0)
-        continue;
 
-      // 简化PTS处理逻辑
-      int64_t pts = frame->pts != AV_NOPTS_VALUE
-                        ? frame->pts
-                        : (frame->best_effort_timestamp != AV_NOPTS_VALUE
-                               ? frame->best_effort_timestamp
-                               : 0);
+      // 初始化/重置音频解码资源（如果轨道变化）
+      if (!actx || curAid != m_audioStreamIndices[m_audioTrackIndex]) {
+        acodec = find_decoder(fmt_ctx->streams[curAid]->codecpar->codec_id,
+                              AVMEDIA_TYPE_AUDIO);
+        if (!acodec) {
+          qWarning() << "Audio decoder not found";
+          emit errorOccurred(tr("未找到音频解码器"));
+          break;
+        }
+        actx = make_avcodec_ctx(acodec);
+        if (!actx) {
+          qWarning() << "Failed to allocate audio decoder context";
+          emit errorOccurred(tr("无法分配音频解码器上下文"));
+          break;
+        }
+        if (avcodec_parameters_to_context(
+                actx.get(), fmt_ctx->streams[curAid]->codecpar) < 0) {
+          qWarning() << "Failed to copy audio decoder parameters";
+          emit errorOccurred(tr("无法复制音频解码器参数"));
+          break;
+        }
+        if (avcodec_open2(actx.get(), acodec, nullptr) < 0) {
+          qWarning() << "Failed to open audio decoder";
+          emit errorOccurred(tr("无法打开音频解码器"));
+          break;
+        }
+        atime_base = fmt_ctx->streams[curAid]->time_base;
+        if (swr_ctx)
+          swr_free(&swr_ctx);
+        if (actx->channel_layout == 0)
+          actx->channel_layout = av_get_default_channel_layout(actx->channels);
+        swr_ctx = swr_alloc_set_opts(
+            nullptr, av_get_default_channel_layout(OUT_CHANNELS),
+            OUT_SAMPLE_FMT, OUT_SAMPLE_RATE, actx->channel_layout,
+            actx->sample_fmt, actx->sample_rate, 0, nullptr);
+        if (!swr_ctx || swr_init(swr_ctx) < 0) {
+          qWarning() << "Failed to initialize audio resample context";
+          emit errorOccurred(tr("音频重采样初始化失败"));
+          swr_free(&swr_ctx);
+          break;
+        }
+      }
 
-      int64_t ms = pts * atime_base.num * 1000LL / atime_base.den;
-      if (ms < 0)
-        continue;
-
-      // 更新音频时钟
-      m_audioClockMs.store(ms);
-
-      // 音频同步常量
-      static double audio_drift_threshold = 0.005;
-      static double audio_diff_avg_coef = 0.98;
-      static double audio_diff_threshold = 0.03;
-      static double audio_diff_avg = 0.0;
-
-      // 第一帧处理
-      if (first_audio_frame) {
+      // 暂停处理
+      if (m_pause) {
+        std::unique_lock<std::mutex> lk(m_mutex);
+        m_cond.wait(lk, [&] { return m_stop || !m_pause || m_seeking; });
+        if (m_stop)
+          break;
         audio_playback_start_time = clock::now();
-        first_audio_pts = ms;
-        first_audio_frame = false;
-      } else {
-        // 计算音频播放与时钟的差异
-        int64_t elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                              clock::now() - audio_playback_start_time)
-                              .count();
-        double diff = (ms - first_audio_pts) - elapsed;
-
-        // 更新平均差异（仅在合理范围内）
-        if (std::abs(diff) < 500) {
-          audio_diff_avg = audio_diff_avg * audio_diff_avg_coef +
-                           diff * (1.0 - audio_diff_avg_coef);
-        }
-
-        // 动态计算同步阈值
-        double sync_threshold = std::max(
-            5.0, std::min(audio_diff_threshold * elapsed * 0.001, 30.0));
-
-        // 检查是否需要同步调整
-        if (std::abs(diff) > sync_threshold) {
-          // 音频领先于时钟，等待
-          if (diff > 0 && !m_stop && !m_seeking) {
-            double delay = std::min(diff * 0.85, 40.0);
-            std::this_thread::sleep_for(
-                std::chrono::milliseconds(static_cast<int>(delay)));
-          }
-          // 音频落后太多，丢弃帧
-          else if (diff < -200) {
-            continue;
-          }
-        }
-
-        // 处理长期漂移
-        if (std::abs(audio_diff_avg) > audio_drift_threshold) {
-          auto adjustment =
-              std::chrono::milliseconds(static_cast<int>(audio_diff_avg * 0.6));
-          audio_playback_start_time += adjustment;
-          audio_diff_avg *= 0.3;
-        }
+        first_audio_pts = AV_NOPTS_VALUE;
+        first_audio_frame = true;
       }
 
-      // 再次检查状态
-      if (m_stop || m_seeking)
-        break;
-      int out_nb = av_rescale_rnd(
-          swr_get_delay(swr_ctx, actx->sample_rate) + frame->nb_samples,
-          OUT_SAMPLE_RATE, actx->sample_rate, AV_ROUND_UP);
-      if (out_nb > out_buf_samples) {
-        if (out_buf) {
-          av_freep(&out_buf[0]);
-          av_freep(&out_buf);
+      // 跳转处理
+      if (m_seeking) {
+        int64_t ts = m_seekTarget * (AV_TIME_BASE / 1000);
+        av_seek_frame(fmt_ctx.get(), -1, ts, AVSEEK_FLAG_BACKWARD);
+        avcodec_flush_buffers(actx.get());
+        audio_playback_start_time = clock::now();
+        first_audio_pts = AV_NOPTS_VALUE;
+        first_audio_frame = true;
+        av_packet_unref(pkt.get());
+        av_frame_unref(frame.get());
+        {
+          std::lock_guard<std::mutex> lk(m_mutex);
+          m_audioSeekHandled = true;
+          if (m_videoSeekHandled)
+            m_seeking = false;
         }
-        av_samples_alloc_array_and_samples(&out_buf, nullptr, OUT_CHANNELS,
-                                           out_nb, OUT_SAMPLE_FMT, 0);
-        out_buf_samples = out_nb;
+        continue;
       }
-      int converted =
-          swr_convert(swr_ctx, out_buf, out_nb, (const uint8_t **)frame->data,
-                      frame->nb_samples);
-      int data_size = av_samples_get_buffer_size(nullptr, OUT_CHANNELS,
-                                                 converted, OUT_SAMPLE_FMT, 1);
-      QByteArray pcm =
-          QByteArray::fromRawData((const char *)out_buf[0], data_size);
-      emit audioReady(pcm);
-      emit positionChanged(ms);
+
+      // 读取音频帧
+      if (av_read_frame(fmt_ctx.get(), pkt.get()) < 0) {
+        m_eof = true;
+        std::unique_lock<std::mutex> lk(m_mutex);
+        m_cond.wait_for(lk, std::chrono::milliseconds(50),
+                        [&] { return m_stop || m_seeking || m_eof == false; });
+        if (m_stop)
+          break;
+        if (m_seeking) {
+          m_eof = false;
+          continue;
+        }
+        continue;
+      }
+
+      // 判断是否为音频流
+      if (pkt->stream_index != curAid) {
+        av_packet_unref(pkt.get());
+        continue;
+      }
+
+      // 发送音频帧到解码器
+      avcodec_send_packet(actx.get(), pkt.get());
+
+      // 接收解码后的音频帧
+      while (!m_stop && !m_seeking &&
+             avcodec_receive_frame(actx.get(), frame.get()) == 0) {
+        if (frame->nb_samples == 0)
+          continue;
+
+        int64_t pts = frame->pts != AV_NOPTS_VALUE
+                          ? frame->pts
+                          : (frame->best_effort_timestamp != AV_NOPTS_VALUE
+                                 ? frame->best_effort_timestamp
+                                 : 0);
+        int64_t ms = pts * atime_base.num * 1000LL / atime_base.den;
+        if (ms < 0)
+          continue;
+        m_audioClockMs.store(ms);
+
+        static double audio_drift_threshold = 0.005;
+        static double audio_diff_avg_coef = 0.98;
+        static double audio_diff_threshold = 0.03;
+
+        if (first_audio_frame) {
+          audio_playback_start_time = clock::now();
+          first_audio_pts = ms;
+          first_audio_frame = false;
+        } else {
+          int64_t elapsed =
+              std::chrono::duration_cast<std::chrono::milliseconds>(
+                  clock::now() - audio_playback_start_time)
+                  .count();
+          double diff = (ms - first_audio_pts) - elapsed;
+          if (std::abs(diff) < 500) {
+            audio_diff_avg = audio_diff_avg * audio_diff_avg_coef +
+                             diff * (1.0 - audio_diff_avg_coef);
+          }
+          double sync_threshold = std::max(
+              5.0, std::min(audio_diff_threshold * elapsed * 0.001, 30.0));
+          if (std::abs(diff) > sync_threshold) {
+            if (diff > 0 && !m_stop && !m_seeking) {
+              double delay = std::min(diff * 0.85, 40.0);
+              std::this_thread::sleep_for(
+                  std::chrono::milliseconds(static_cast<int>(delay)));
+            } else if (diff < -200) {
+              continue;
+            }
+          }
+          if (std::abs(audio_diff_avg) > audio_drift_threshold) {
+            auto adjustment = std::chrono::milliseconds(
+                static_cast<int>(audio_diff_avg * 0.6));
+            audio_playback_start_time += adjustment;
+            audio_diff_avg *= 0.3;
+          }
+        }
+
+        if (m_stop || m_seeking)
+          break;
+
+        int out_nb = av_rescale_rnd(
+            swr_get_delay(swr_ctx, actx->sample_rate) + frame->nb_samples,
+            OUT_SAMPLE_RATE, actx->sample_rate, AV_ROUND_UP);
+        if (out_nb > out_buf_samples) {
+          if (out_buf) {
+            av_freep(&out_buf[0]);
+            av_freep(&out_buf);
+          }
+          av_samples_alloc_array_and_samples(&out_buf, nullptr, OUT_CHANNELS,
+                                             out_nb, OUT_SAMPLE_FMT, 0);
+          out_buf_samples = out_nb;
+        }
+        int converted =
+            swr_convert(swr_ctx, out_buf, out_nb, (const uint8_t **)frame->data,
+                        frame->nb_samples);
+        int data_size = av_samples_get_buffer_size(
+            nullptr, OUT_CHANNELS, converted, OUT_SAMPLE_FMT, 1);
+        QByteArray pcm =
+            QByteArray::fromRawData((const char *)out_buf[0], data_size);
+        emit audioReady(pcm);
+        emit positionChanged(ms);
+      }
+      av_packet_unref(pkt.get());
     }
-    av_packet_unref(pkt.get());
+
+    // 清理资源
+    if (out_buf) {
+      av_freep(&out_buf[0]);
+      av_freep(&out_buf);
+    }
+    if (swr_ctx)
+      swr_free(&swr_ctx);
   }
-  if (out_buf) {
-    av_freep(&out_buf[0]);
-    av_freep(&out_buf);
-  }
-  if (swr_ctx)
-    swr_free(&swr_ctx);
 }
