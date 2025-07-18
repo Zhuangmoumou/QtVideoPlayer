@@ -383,6 +383,8 @@ void FFMpegDecoder::videoDecodeLoop() {
       // 接收解码后的视频帧
       while (!m_stop && !m_seeking &&
              avcodec_receive_frame(vctx.get(), frame.get()) == 0) {
+        double speed = m_playbackSpeed.load();
+
         int64_t pts = frame->best_effort_timestamp;
         if (pts == AV_NOPTS_VALUE)
           pts = frame->pts;
@@ -405,7 +407,7 @@ void FFMpegDecoder::videoDecodeLoop() {
             int waited = 0;
             if (diff > 20 && waited < max_wait && !m_stop && !m_pause &&
                 !m_seeking) {
-              int sleep_time = static_cast<int>(diff * 0.8);
+              int sleep_time = static_cast<int>(diff * 0.8 / speed);
               std::this_thread::sleep_for(
                   std::chrono::milliseconds(sleep_time));
               waited += sleep_time;
@@ -426,10 +428,23 @@ void FFMpegDecoder::videoDecodeLoop() {
           } else if (diff < -frame_interval * 6) {
             continue;
           }
-        } else if (!hasAudio) {
+        }
+
+        if (!hasAudio) {
           static qint64 last_video_pts = 0;
           static auto last_wall_clock = clock::now();
-          if (last_video_pts == 0 || ms < last_video_pts) {
+          static float last_video_speed = 1.0f;
+
+          float speed = m_playbackSpeed.load(); // 加入倍速控制
+
+          // 检测速度变化，如果速度变化超过阈值，重置视频同步参考点
+          bool speed_changed = fabs(speed - last_video_speed) > 0.1f;
+          if (speed_changed) {
+            last_video_pts = 0; // 强制重置参考点
+            last_video_speed = speed;
+          }
+
+          if (last_video_pts == 0 || ms < last_video_pts || speed_changed) {
             last_video_pts = ms;
             last_wall_clock = clock::now();
           } else {
@@ -439,10 +454,13 @@ void FFMpegDecoder::videoDecodeLoop() {
                 std::chrono::duration_cast<std::chrono::milliseconds>(
                     now - last_wall_clock)
                     .count();
-            if (!m_stop && !m_seeking && !m_pause && elapsed < pts_diff) {
+
+            if (!m_stop && !m_seeking && !m_pause &&
+                elapsed < pts_diff / speed) {
               std::this_thread::sleep_for(std::chrono::milliseconds(
-                  static_cast<int>(pts_diff - elapsed)));
+                  static_cast<int>((pts_diff / speed) - elapsed)));
             }
+
             if (!m_stop && !m_seeking) {
               last_video_pts = ms;
               last_wall_clock = clock::now();
@@ -755,7 +773,17 @@ void FFMpegDecoder::audioDecodeLoop() {
         continue;
       m_audioClockMs.store(ms);
 
-      // --- 音频同步逻辑 (与原版相同，但现在基于干净的状态运行) ---
+      // --- 音频同步逻辑 (改进版，支持倍速平滑切换) ---
+      double speed = m_playbackSpeed.load();
+
+      // 检测速度变化，如果速度变化超过阈值，重置同步参考点
+      static double last_speed = 1.0;
+      bool speed_changed = fabs(speed - last_speed) > 0.1;
+      if (speed_changed) {
+        first_audio_frame = true; // 强制重置参考点
+        last_speed = speed;
+      }
+
       if (first_audio_frame) {
         audio_playback_start_time = clock::now();
         first_audio_pts = ms;
@@ -765,7 +793,7 @@ void FFMpegDecoder::audioDecodeLoop() {
             std::chrono::duration_cast<std::chrono::milliseconds>(
                 clock::now() - audio_playback_start_time)
                 .count();
-        double diff_ms = (double)(ms - first_audio_pts) - elapsed_ms;
+        double diff_ms = ((ms - first_audio_pts) / speed) - elapsed_ms;
 
         // 简单的同步：如果音频播放得太快，就等待一下
         if (diff_ms > 10) { // 音频超前于时钟
@@ -813,5 +841,16 @@ void FFMpegDecoder::audioDecodeLoop() {
   }
   if (swr_ctx) {
     swr_free(&swr_ctx);
+  }
+}
+
+void FFMpegDecoder::setPlaybackSpeed(float speed) {
+  // 限制播放速度范围在0.25-4.0之间
+  float newSpeed = std::max(0.25f, std::min(speed, 4.0f));
+  float oldSpeed = m_playbackSpeed.load();
+
+  // 只有当速度真正变化时才更新和发送信号
+  if (fabs(newSpeed - oldSpeed) > 0.01f) {
+    m_playbackSpeed.store(newSpeed);
   }
 }

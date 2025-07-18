@@ -1,15 +1,15 @@
 #pragma once
+#include <QAction>
 #include <QAudioOutput>
 #include <QElapsedTimer>
+#include <QFileSystemWatcher> // 新增
 #include <QMap>
+#include <QMenu>
+#include <QPushButton>
+#include <QSharedPointer>
 #include <QTimer>
 #include <QWidget>
 #include <ass/ass.h> // 新增：libass 头文件
-#include <QFileSystemWatcher> // 新增
-#include <QPushButton>
-#include <QMenu>
-#include <QAction>
-#include <QSharedPointer>
 
 #include "FFMpegDecoder.h"
 #include "LyricRenderer.h"
@@ -57,6 +57,11 @@ private:
   bool isSeeking = false;
   qint64 duration = 0;
   qint64 currentPts = 0;
+
+  // 长按 2 倍速播放相关
+  QTimer *speedPressTimer = nullptr;
+  bool isSpeedPressed = false;
+  float normalPlaybackSpeed = 1.0f;
 
   LyricRenderer *lyricRenderer = nullptr;
   SubtitleRenderer *subtitleRenderer = nullptr;
@@ -109,9 +114,15 @@ private:
   QElapsedTimer *trackButtonTimer;
   QMenu *audioMenu = nullptr;
   QMenu *videoMenu = nullptr;
-  
+
   // 帧率控制
   qint64 lastScrollUpdateTime; // 上次滚动更新时间
-  bool updatePending = false; // 是否有未处理的更新请求
-  qint64 lastUpdateTime = 0; // 上次更新时间
+  bool updatePending = false;  // 是否有未处理的更新请求
+  qint64 lastUpdateTime = 0;   // 上次更新时间
+
+  // 顶部土司消息相关
+  QString toastMessage;
+  QTimer *toastTimer = nullptr;
+  void drawToastMessage(QPainter &p);
+  void showToastMessage(const QString &message, int durationMs = 1500);
 };

@@ -1,8 +1,8 @@
 #pragma once
 #include <QImage>
 #include <QObject>
-#include <QString>
 #include <QSharedPointer>
+#include <QString>
 #include <atomic>
 #include <condition_variable>
 #include <mutex>
@@ -36,6 +36,9 @@ public:
   int videoTrackCount() const;
   int currentVideoTrack() const;
   QString videoTrackName(int idx) const;
+
+  // 倍速支持
+  void setPlaybackSpeed(float speed);
 
 signals:
   void frameReady(const QSharedPointer<QImage> &img);
@@ -72,11 +75,14 @@ private:
   void videoDecodeLoop();
   void audioDecodeLoop();
 
-  int m_audioTrackIndex = 0; // -1为静音
-  mutable std::vector<int> m_audioStreamIndices; // 存储所有音频流索引
+  int m_audioTrackIndex = 0;                       // -1为静音
+  mutable std::vector<int> m_audioStreamIndices;   // 存储所有音频流索引
   mutable std::vector<QString> m_audioStreamNames; // 存储音轨描述
 
   int m_videoTrackIndex = 0; // -1为无视频
   mutable std::vector<int> m_videoStreamIndices;
   mutable std::vector<QString> m_videoStreamNames;
+
+  // 倍速支持
+  std::atomic<float> m_playbackSpeed{1.0f};
 };

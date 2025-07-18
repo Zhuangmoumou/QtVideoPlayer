@@ -1,22 +1,26 @@
 #include "VideoPlayer.h"
 #include "LyricManager.h"
-#include "SubtitleManager.h"
 #include "LyricRenderer.h"
+#include "SubtitleManager.h"
 #include "SubtitleRenderer.h"
 #include "qelapsedtimer.h"
 #include "qglobal.h"
-#include <QDateTime>
+#include <QAction>
 #include <QCoreApplication>
+#include <QDateTime>
 #include <QDebug>
 #include <QDir>
 #include <QFile>
 #include <QMediaMetaData>
+#include <QMenu>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
 #include <QProcess>
-#include <QTextStream>
+#include <QPushButton>
 #include <QSharedPointer>
+#include <QTextStream>
+#include <QTimer>
 #include <ass/ass.h>
 #include <taglib/attachedpictureframe.h>
 #include <taglib/fileref.h>
@@ -26,12 +30,10 @@
 #include <taglib/tag.h>
 #include <taglib/unsynchronizedlyricsframe.h>
 #include <taglib/xiphcomment.h>
-#include <QTimer>
-#include <QPushButton>
-#include <QMenu>
-#include <QAction>
 
-VideoPlayer::VideoPlayer(QWidget *parent) : QWidget(parent), lastScrollUpdateTime(0), updatePending(false), lastUpdateTime(0) {
+VideoPlayer::VideoPlayer(QWidget *parent)
+    : QWidget(parent), lastScrollUpdateTime(0), updatePending(false),
+      lastUpdateTime(0) {
   setAttribute(Qt::WA_AcceptTouchEvents);
   setWindowFlags(Qt::FramelessWindowHint);
 
@@ -63,10 +65,36 @@ VideoPlayer::VideoPlayer(QWidget *parent) : QWidget(parent), lastScrollUpdateTim
     errorMessage.clear();
     scheduleUpdate();
   });
-  connect(decoder, &FFMpegDecoder::errorOccurred, this, [this](const QString &msg) {
-    errorMessage = msg;
-    errorShowTimer->start(3000); // 显示 3 秒
+  connect(decoder, &FFMpegDecoder::errorOccurred, this,
+          [this](const QString &msg) {
+            errorMessage = msg;
+            errorShowTimer->start(3000); // 显示 3 秒
+            scheduleUpdate();
+          });
+
+  // 新增：顶部土司消息
+  toastTimer = new QTimer(this);
+  toastTimer->setSingleShot(true);
+  connect(toastTimer, &QTimer::timeout, this, [this]() {
+    toastMessage.clear();
     scheduleUpdate();
+  });
+
+  // 初始化长按 2 倍速播放定时器
+  speedPressTimer = new QTimer(this);
+  speedPressTimer->setSingleShot(true);
+  connect(speedPressTimer, &QTimer::timeout, this, [this]() {
+    if (pressed && !isSeeking) {
+      normalPlaybackSpeed = 1.0f; // 保存原始速度
+      isSpeedPressed = true;
+      decoder->setPlaybackSpeed(2.0f); // 设置 2 倍速
+
+      // 显示 2 倍速提示，使用土司消息
+      toastMessage = "▶▶ 2 倍速播放中";
+      toastTimer->stop(); // 停止计时器，确保消息持续显示
+
+      scheduleUpdate();
+    }
   });
 
   // Overlay 更新
@@ -85,7 +113,7 @@ VideoPlayer::VideoPlayer(QWidget *parent) : QWidget(parent), lastScrollUpdateTim
 
   trackButtonTimer = new QElapsedTimer();
   trackButtonTimer->start();
-  
+
   // 帧率控制定时器 - 60fps (约 16.67ms)
   frameRateTimer = new QTimer(this);
   frameRateTimer->setInterval(16); // ~60fps
@@ -167,7 +195,8 @@ VideoPlayer::VideoPlayer(QWidget *parent) : QWidget(parent), lastScrollUpdateTim
   // 轨道切换按钮和菜单
   trackButton = new QPushButton("轨道", this);
   trackButton->setGeometry(10, 40, 60, 28);
-  trackButton->setStyleSheet("background:rgba(30,30,30,180);color:white;border-radius:8px;");
+  trackButton->setStyleSheet(
+      "background:rgba(30,30,30,180);color:white;border-radius:8px;");
   trackButton->raise();
   connect(trackButton, &QPushButton::clicked, this, [this]() {
     QMenu menu;
@@ -181,8 +210,8 @@ VideoPlayer::VideoPlayer(QWidget *parent) : QWidget(parent), lastScrollUpdateTim
       audioGroup->addAction(act);
       connect(act, &QAction::triggered, this, [this, i]() {
         decoder->setAudioTrack(i);
-        errorMessage = tr("切换音轨: %1").arg(decoder->audioTrackName(i));
-        errorShowTimer->start(2000);
+        toastMessage = tr("切换音轨: %1").arg(decoder->audioTrackName(i));
+        toastTimer->start(2000);
         scheduleUpdate();
       });
     }
@@ -207,8 +236,8 @@ VideoPlayer::VideoPlayer(QWidget *parent) : QWidget(parent), lastScrollUpdateTim
       videoGroup->addAction(act);
       connect(act, &QAction::triggered, this, [this, i]() {
         decoder->setVideoTrack(i);
-        errorMessage = tr("切换视频轨道: %1").arg(decoder->videoTrackName(i));
-        errorShowTimer->start(2000);
+        toastMessage = tr("切换视频轨道: %1").arg(decoder->videoTrackName(i));
+        toastTimer->start(2000);
         scheduleUpdate();
       });
     }
@@ -218,8 +247,8 @@ VideoPlayer::VideoPlayer(QWidget *parent) : QWidget(parent), lastScrollUpdateTim
     videoGroup->addAction(noVideoAct);
     connect(noVideoAct, &QAction::triggered, this, [this]() {
       decoder->setVideoTrack(-1);
-      errorMessage = tr("切换视频轨道: 无视频轨道");
-      errorShowTimer->start(2000);
+      toastMessage = tr("切换视频轨道: 无视频轨道");
+      toastTimer->start(2000);
       scheduleUpdate();
     });
     menu.exec(trackButton->mapToGlobal(QPoint(0, trackButton->height())));
@@ -231,6 +260,16 @@ VideoPlayer::~VideoPlayer() {
   audioOutput->stop();
   scrollTimer->stop();
   frameRateTimer->stop();
+
+  // 停止长按 2 倍速播放定时器
+  if (speedPressTimer) {
+    speedPressTimer->stop();
+  }
+
+  // 停止土司定时器
+  if (toastTimer) {
+    toastTimer->stop();
+  }
 
   // 新增：libass 资源释放
   // 由SubtitleManager自动管理ASS资源，无需手动释放assTrack/hasAssSubtitle
@@ -361,7 +400,7 @@ void VideoPlayer::onPositionChanged(qint64 pts) {
   if (oldLyricIndex != lyricManager->getCurrentLyricIndex()) {
     lyricFadeTimer.restart();
     overlayTimer->start();
-    needUpdate = true;  // 歌词变化时需要更新 UI
+    needUpdate = true; // 歌词变化时需要更新 UI
   }
 
   // 只在需要时更新 UI
@@ -373,12 +412,31 @@ void VideoPlayer::onPositionChanged(qint64 pts) {
 void VideoPlayer::mousePressEvent(QMouseEvent *e) {
   pressed = true;
   pressPos = e->pos();
-  // pressTimer.start();
-  // 移除长按关闭窗口逻辑
+
+  // 启动长按检测定时器，500ms 后触发 2 倍速播放
+  if (speedPressTimer) {
+    speedPressTimer->start(500); // 500ms 长按触发
+  }
 }
 
 void VideoPlayer::mouseReleaseEvent(QMouseEvent *) {
   pressed = false;
+
+  // 取消长按定时器
+  if (speedPressTimer) {
+    speedPressTimer->stop();
+  }
+
+  // 如果是在 2 倍速状态，恢复正常速度
+  if (isSpeedPressed) {
+    decoder->setPlaybackSpeed(1.0f);
+    isSpeedPressed = false;
+    toastMessage = "";
+    toastTimer->start(200); // 显示 0.2 秒后消失
+    scheduleUpdate();
+    return;
+  }
+
   if (isSeeking) {
     isSeeking = false;
     // seek 前检查 duration 是否有效
@@ -448,6 +506,9 @@ void VideoPlayer::paintEvent(QPaintEvent *) {
     targetRect.moveCenter(rect().center());
     p.drawImage(targetRect, *currentFrame);
   }
+  // 绘制顶部土司消息
+  drawToastMessage(p);
+  // 绘制错误消息
   if (!errorMessage.isEmpty()) {
     QFont errFont("Microsoft YaHei", overlayFontSize + 4, QFont::Bold);
     p.setFont(errFont);
@@ -455,7 +516,9 @@ void VideoPlayer::paintEvent(QPaintEvent *) {
     QFontMetrics fm(errFont);
     int textWidth = fm.horizontalAdvance(msg);
     int textHeight = fm.height();
-    QRect boxRect((width() - textWidth) / 2 - 30, (height() - textHeight) / 2 - 16, textWidth + 60, textHeight + 32);
+    QRect boxRect((width() - textWidth) / 2 - 30,
+                  (height() - textHeight) / 2 - 16, textWidth + 60,
+                  textHeight + 32);
     p.setRenderHint(QPainter::Antialiasing, true);
     p.setPen(Qt::NoPen);
     p.setBrush(QColor(0, 0, 0, 180));
@@ -464,16 +527,17 @@ void VideoPlayer::paintEvent(QPaintEvent *) {
     p.drawText(boxRect, Qt::AlignCenter, msg);
   }
   if (trackButtonTimer->elapsed() > 100) {
-      trackButton->setVisible(showOverlayBar);
-      trackButton->setEnabled(true);
-      trackButton->raise();
-      trackButtonTimer->restart();
+    trackButton->setVisible(showOverlayBar);
+    trackButton->setEnabled(true);
+    trackButton->raise();
+    trackButtonTimer->restart();
   }
   if (showOverlayBar) {
     drawOverlayBar(p);
   }
   drawSubtitlesAndLyrics(p);
-  if (subtitleManager->hasAss() && subtitleManager->getAssTrack() && assRenderer) {
+  if (subtitleManager->hasAss() && subtitleManager->getAssTrack() &&
+      assRenderer) {
     subtitleRenderer->setAssRenderer(assRenderer);
     subtitleRenderer->drawAssSubtitles(p, width(), height(), currentPts);
   }
@@ -569,7 +633,8 @@ void VideoPlayer::drawProgressBar(QPainter &p) {
 void VideoPlayer::drawSubtitlesAndLyrics(QPainter &p) {
   QRect lyricRect = rect().adjusted(0, height() - 70, 0, -10);
   subtitleRenderer->drawSrtSubtitles(p, lyricRect, overlayFontSize, currentPts);
-  lyricRenderer->drawLyrics(p, lyricRect, overlayFontSize, lyricOpacity, lyricFadeTimer);
+  lyricRenderer->drawLyrics(p, lyricRect, overlayFontSize, lyricOpacity,
+                            lyricFadeTimer);
 }
 
 void VideoPlayer::updateOverlay() {
@@ -613,5 +678,44 @@ void VideoPlayer::scheduleUpdate() {
     // 只有当间隔超过 5ms 时才设置标记，避免过于频繁的更新请求
     updatePending = true;
   }
-  // 小于 5ms 的更新请求会被忽略，防止频繁的 UI 更新
+}
+
+void VideoPlayer::showToastMessage(const QString &message, int durationMs) {
+  toastMessage = message;
+  if (durationMs > 0) {
+    toastTimer->start(durationMs);
+  } else {
+    toastTimer->stop(); // 停止定时器，确保消息持续显示
+  }
+  scheduleUpdate();
+}
+
+void VideoPlayer::drawToastMessage(QPainter &p) {
+  if (toastMessage.isEmpty()) {
+    return;
+  }
+
+  // 设置土司消息的字体
+  QFont toastFont("Microsoft YaHei", overlayFontSize + 2, QFont::Bold);
+  p.setFont(toastFont);
+
+  // 计算文本尺寸
+  QFontMetrics fm(toastFont);
+  int textWidth = fm.horizontalAdvance(toastMessage);
+  int textHeight = fm.height();
+
+  // 创建土司框矩形，位于屏幕上方居中
+  QRect toastRect((width() - textWidth) / 2 - 20,
+                  20, // 距离顶部20像素
+                  textWidth + 40, textHeight + 16);
+
+  // 绘制圆角背景
+  p.setRenderHint(QPainter::Antialiasing, true);
+  p.setPen(Qt::NoPen);
+  p.setBrush(QColor(0, 0, 0, 180)); // 半透明黑色背景
+  p.drawRoundedRect(toastRect, 12, 12);
+
+  // 绘制文本
+  p.setPen(Qt::white); // 白色文本
+  p.drawText(toastRect, Qt::AlignCenter, toastMessage);
 }
