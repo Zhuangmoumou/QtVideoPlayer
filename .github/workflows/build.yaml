@@ -14,7 +14,6 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential git-lfs
-          git lfs install
 
       - name: Checkout main repository
         uses: actions/checkout@v4
@@ -35,6 +34,8 @@ jobs:
 
       - name: Build with qmake
         run: |
+          git lfs install
+          git lfs pull
           ./qt-5.15.2-for-aarch64-dictpen-linux/bin/qmake NewPlayer.pro
           make -j$(nproc)
 
