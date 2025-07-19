@@ -23,7 +23,7 @@ QMAKE_CXXFLAGS += -Wno-deprecated-declarations
 INCLUDEPATH += $$PWD/include/
 LIBS += -L$$PWD/libs/taglib -ltag \
         -L$$PWD/libs/libass -lass -lfribidi -lharfbuzz -lunibreak \
-        -L/home/lyrecoul/PenDevelopment/lib \
+        -L$$PWD/dictpen-libs \
         -lavformat -lavcodec -lavutil -lswscale -lswresample \
         -lavdevice -lz -lasound -lavfilter \
         -lfontconfig -lfreetype -lexpat -lpng16 -lglib-2.0 -lpcre2-8 \

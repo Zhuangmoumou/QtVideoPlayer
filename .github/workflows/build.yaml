@@ -1,4 +1,4 @@
-name: Build and Release
+name: Build and Upload artifact
 
 on:
   push:
@@ -10,6 +10,11 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential git-lfs
+
       - name: Checkout main repository
         uses: actions/checkout@v4
 
@@ -19,15 +24,13 @@ jobs:
       - name: Clone GCC repository
         run: git clone https://github.com/Lyrecoul/aarch64-dictpen-linux-gnu-gcc-toolchain.git
 
+      - name: Clone Dictpen libs repository
+        run: git clone https://github.com/Lyrecoul/dictpen-libs.git
+
       - name: Set up environment
         run: |
           echo "$PWD/qt-5.15.2-for-aarch64-dictpen-linux/bin" >> $GITHUB_PATH
           echo "$PWD/aarch64-dictpen-linux-gnu-gcc-toolchain/bin" >> $GITHUB_PATH
-
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential
 
       - name: Build with qmake
         run: |
