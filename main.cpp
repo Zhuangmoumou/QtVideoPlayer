@@ -11,25 +11,25 @@ int main(int argc, char *argv[])
     QApplication::setApplicationName("NewPlayer");
 
     QStringList args = app.arguments();
-    // 支持短参数补全
     bool showHelp = false;
+    bool resumePlayback = true; // 默认启用记忆播放
     QString path;
     for (int i = 1; i < args.size(); ++i) {
         QString arg = args.at(i);
         if (arg == "--help" || arg == "-h") {
             showHelp = true;
+        } else if (arg == "--no-memory" || arg == "-nm") {
+            resumePlayback = false; // 禁用记忆播放
         } else if (!arg.startsWith("-") && path.isEmpty()) {
             path = arg;
         }
     }
 
     if (showHelp) {
-        // qDebug() << "用法: NewPlayer <视频文件路径>";
-        qDebug() << "Usage: NewPlayer <video file path>";
-        // qDebug() << "参数:";
+        qDebug() << "Usage: NewPlayer [options] <video file path>";
         qDebug() << "Options:";
-        // qDebug() << "  --help, -h          显示帮助信息";
         qDebug() << "  --help, -h          Show help information";
+        qDebug() << "  --no-memory, -n     Disable resume playback";
         return 0;
     }
 
@@ -43,10 +43,13 @@ int main(int argc, char *argv[])
         // 带参数启动，直接全屏播放
         VideoPlayer *player = new VideoPlayer;
         player->setWindowState(Qt::WindowFullScreen);
+        
+        // 设置是否启用记忆播放
+        player->setResumeEnabled(resumePlayback);
+        
         player->play(path);
         return app.exec();
     } else {
-        // qDebug() << "未指定视频文件路径。使用 --help 查看用法。";
         qDebug() << "No video file path specified. Use --help to see usage.";
         return 0;
     }

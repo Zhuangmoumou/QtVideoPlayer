@@ -350,8 +350,10 @@ void FFMpegDecoder::videoDecodeLoop() {
         {
           std::lock_guard<std::mutex> lk(m_mutex);
           m_videoSeekHandled = true;
-          if (m_audioSeekHandled)
+          if (m_audioSeekHandled) {
             m_seeking = false;
+            emit seekCompleted();
+            }
         }
         continue;
       }
@@ -718,8 +720,10 @@ void FFMpegDecoder::audioDecodeLoop() {
       {
         std::lock_guard<std::mutex> lk(m_mutex);
         m_audioSeekHandled = true;
-        if (m_videoSeekHandled)
+        if (m_videoSeekHandled) {
           m_seeking = false;
+          emit seekCompleted();
+          }
       }
       continue;
     }

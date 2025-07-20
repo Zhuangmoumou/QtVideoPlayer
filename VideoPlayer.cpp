@@ -3,7 +3,7 @@
 #include "LyricRenderer.h"
 #include "SubtitleManager.h"
 #include "SubtitleRenderer.h"
-#include "qelapsedtimer.h"
+#include "qdebug.h"
 #include "qglobal.h"
 #include <QAction>
 #include <QCoreApplication>
@@ -37,6 +37,9 @@ VideoPlayer::VideoPlayer(QWidget *parent)
   setAttribute(Qt::WA_AcceptTouchEvents);
   setWindowFlags(Qt::FramelessWindowHint);
 
+  // 初始化播放历史记录
+  playHistory = new QSettings("NewPlayer", "PlayHistory", this);
+  
   // AudioOutput
   QAudioFormat format;
   format.setSampleRate(44100);
@@ -58,6 +61,7 @@ VideoPlayer::VideoPlayer(QWidget *parent)
           [&](qint64 d) { duration = d; });
   connect(decoder, &FFMpegDecoder::positionChanged, this,
           &VideoPlayer::onPositionChanged);
+  connect(decoder, &FFMpegDecoder::seekCompleted, this, &VideoPlayer::onSeekCompleted); // 新增连接
   // 新增：错误提示
   errorShowTimer = new QTimer(this);
   errorShowTimer->setSingleShot(true);
@@ -277,6 +281,9 @@ VideoPlayer::VideoPlayer(QWidget *parent)
 }
 
 VideoPlayer::~VideoPlayer() {
+  // 保存当前播放位置
+  savePlayPosition();
+  
   decoder->stop();
   audioOutput->stop();
   scrollTimer->stop();
@@ -310,6 +317,14 @@ VideoPlayer::~VideoPlayer() {
 }
 
 void VideoPlayer::play(const QString &path) {
+  // 保存上一个文件的播放位置
+  if (!currentFilePath.isEmpty()) {
+    savePlayPosition();
+  }
+  
+  // 更新当前文件路径
+  currentFilePath = path;
+  
   // 启动音频输出
   QProcess::execute("ubus", QStringList()
                                 << "call" << "eq_drc_process.output.rpc"
@@ -379,6 +394,10 @@ void VideoPlayer::play(const QString &path) {
   // 重置滚动
   scrollOffset = 0;
   scrollTimer->stop();
+  
+  // 加载播放位置
+  loadPlayPosition();
+  
   decoder->start(path);
   show();
   showOverlayBar = true;
@@ -697,6 +716,7 @@ void VideoPlayer::showOverlayBarForSeconds(int seconds) {
   speedButton->setVisible(true);
   overlayBarTimer->start(seconds * 1000);
 }
+
 void VideoPlayer::scheduleUpdate() {
   // 获取当前时间戳
   qint64 currentTime = QDateTime::currentMSecsSinceEpoch();
@@ -749,4 +769,28 @@ void VideoPlayer::drawToastMessage(QPainter &p) {
   // 绘制文本
   p.setPen(Qt::white); // 白色文本
   p.drawText(toastRect, Qt::AlignCenter, toastMessage);
+}
+
+// 新增：保存播放位置
+void VideoPlayer::savePlayPosition() {
+  if (!currentFilePath.isEmpty() && currentPts > 0) {
+    playHistory->setValue(currentFilePath, currentPts);
+  }
+}
+
+// 新增：加载播放位置
+void VideoPlayer::loadPlayPosition() {
+  if (playHistory->contains(currentFilePath)) {
+    qint64 position = playHistory->value(currentFilePath).toLongLong();
+    if (position > 0 && position < duration) {
+      decoder->seek(position);
+      showToastMessage(tr("恢复至上次播放位置"), 2000);
+    }
+  }
+}
+
+// 新增：seek完成处理
+void VideoPlayer::onSeekCompleted() {
+  // 跳转完成后立即保存一次位置
+  savePlayPosition();
 }

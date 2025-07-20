@@ -39,7 +39,7 @@ public:
 
   // 倍速支持
   void setPlaybackSpeed(float speed);
-  float playbackSpeed() const; // <--- **确保这一行存在且是 public 的**
+  float playbackSpeed() const;
 
 signals:
   void frameReady(const QSharedPointer<QImage> &img);
@@ -47,6 +47,7 @@ signals:
   void durationChanged(qint64 ms);
   void positionChanged(qint64 ms);
   void errorOccurred(const QString &message); // 新增：错误信号
+  void seekCompleted(); // 新增：seek完成信号
 
 private:
   // 线程与同步
