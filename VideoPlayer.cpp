@@ -705,15 +705,15 @@ void VideoPlayer::drawToastMessage(QPainter &p) {
   int textHeight = fm.height();
 
   // 创建土司框矩形，位于屏幕上方居中
-  QRect toastRect((width() - textWidth) / 2 - 20,
+  QRect toastRect((width() - textWidth) / 2 - 15,
                   20, // 距离顶部20像素
-                  textWidth + 40, textHeight + 16);
+                  textWidth + 40, textHeight + 10);
 
   // 绘制圆角背景
   p.setRenderHint(QPainter::Antialiasing, true);
   p.setPen(Qt::NoPen);
-  p.setBrush(QColor(0, 0, 0, 180)); // 半透明黑色背景
-  p.drawRoundedRect(toastRect, 12, 12);
+  p.setBrush(QColor(0, 0, 0, 120)); // 半透明黑色背景
+  p.drawRoundedRect(toastRect, 8, 8);
 
   // 绘制文本
   p.setPen(Qt::white); // 白色文本
