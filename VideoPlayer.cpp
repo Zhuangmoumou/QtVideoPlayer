@@ -696,7 +696,7 @@ void VideoPlayer::drawToastMessage(QPainter &p) {
   }
 
   // 设置土司消息的字体
-  QFont toastFont("Microsoft YaHei", overlayFontSize + 2, QFont::Bold);
+  QFont toastFont("Microsoft YaHei", overlayFontSize + 1, QFont::Bold);
   p.setFont(toastFont);
 
   // 计算文本尺寸
@@ -705,14 +705,14 @@ void VideoPlayer::drawToastMessage(QPainter &p) {
   int textHeight = fm.height();
 
   // 创建土司框矩形，位于屏幕上方居中
-  QRect toastRect((width() - textWidth) / 2 - 15,
-                  20, // 距离顶部20像素
-                  textWidth + 40, textHeight + 10);
+  QRect toastRect((width() - textWidth) / 2 - 10,
+                  15, // 距离顶部20像素
+                  textWidth + 20, textHeight + 8);
 
   // 绘制圆角背景
   p.setRenderHint(QPainter::Antialiasing, true);
   p.setPen(Qt::NoPen);
-  p.setBrush(QColor(0, 0, 0, 120)); // 半透明黑色背景
+  p.setBrush(QColor(0, 0, 0, 115)); // 半透明黑色背景
   p.drawRoundedRect(toastRect, 8, 8);
 
   // 绘制文本
