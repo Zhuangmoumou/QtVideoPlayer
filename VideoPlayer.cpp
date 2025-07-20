@@ -484,7 +484,7 @@ void VideoPlayer::seekByDelta(int dx) {
   // 例如：每像素调整为总时长的1/500，限制最小20ms，最大2000ms
   qint64 msPerPx = 20;
   if (duration > 0) {
-    msPerPx = qBound<qint64>(20, duration / 5000, 2000);
+    msPerPx = qBound<qint64>(20, duration / 1000, 2000);
   }
   qint64 delta = dx * msPerPx;
   qint64 target = qBound<qint64>(0, currentPts + delta, duration);
