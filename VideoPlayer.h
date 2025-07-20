@@ -2,14 +2,14 @@
 #include <QAction>
 #include <QAudioOutput>
 #include <QElapsedTimer>
-#include <QFileSystemWatcher> // 新增
+#include <QFileSystemWatcher>
 #include <QMap>
 #include <QMenu>
 #include <QPushButton>
 #include <QSharedPointer>
 #include <QTimer>
 #include <QWidget>
-#include <ass/ass.h> // 新增：libass 头文件
+#include <ass/ass.h>
 
 #include "FFMpegDecoder.h"
 #include "LyricRenderer.h"
@@ -33,7 +33,8 @@ protected:
   void paintEvent(QPaintEvent *e) override;
 
 private slots:
-  void onFrame(const QShared_ptr<QImage> &frame);
+  // --- 这里是关键修正：QShared_ptr -> QSharedPointer ---
+  void onFrame(const QSharedPointer<QImage> &frame);
   void onAudioData(const QByteArray &data);
   void onPositionChanged(qint64 pts);
   void updateOverlay();
@@ -53,7 +54,6 @@ private:
   // 状态管理
   bool pressed = false;
   QPoint pressPos;
-  // QElapsedTimer pressTimer;
   bool isSeeking = false;
   qint64 duration = 0;
   qint64 currentPts = 0;
@@ -98,11 +98,11 @@ private:
 
   QFileSystemWatcher *screenStatusWatcher;
 
-  // 新增：错误提示
+  // 错误提示
   QString errorMessage;
   QTimer *errorShowTimer = nullptr;
 
-  // 新增：歌词渐变相关
+  // 歌词渐变相关
   qreal lyricOpacity = 1.0;
   QElapsedTimer lyricFadeTimer;
 
@@ -115,7 +115,7 @@ private:
   QMenu *audioMenu = nullptr;
   QMenu *videoMenu = nullptr;
 
-  // 新增：精细化倍速控制
+  // 精细化倍速控制
   QPushButton *speedButton = nullptr;
   QVector<float> m_playbackSpeeds;
   int m_currentSpeedIndex = 0;

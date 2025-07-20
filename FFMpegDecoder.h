@@ -39,6 +39,7 @@ public:
 
   // 倍速支持
   void setPlaybackSpeed(float speed);
+  float playbackSpeed() const; // <--- **确保这一行存在且是 public 的**
 
 signals:
   void frameReady(const QSharedPointer<QImage> &img);

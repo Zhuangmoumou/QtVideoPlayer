@@ -854,3 +854,7 @@ void FFMpegDecoder::setPlaybackSpeed(float speed) {
     m_playbackSpeed.store(newSpeed);
   }
 }
+
+float FFMpegDecoder::playbackSpeed() const {
+    return m_playbackSpeed.load();
+}
