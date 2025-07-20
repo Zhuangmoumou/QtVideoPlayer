@@ -6,7 +6,6 @@
 #include <QMap>
 #include <QMenu>
 #include <QPushButton>
-#include <QSettings> // 新增头文件
 #include <QSharedPointer>
 #include <QTimer>
 #include <QWidget>
@@ -22,7 +21,6 @@ public:
   explicit VideoPlayer(QWidget *parent = nullptr);
   ~VideoPlayer();
   void play(const QString &path);
-  void setResumeEnabled(bool enabled) { resumeEnabled = enabled; }
 
 protected:
   // 手势/点击处理（双击关闭窗口）
@@ -35,11 +33,11 @@ protected:
   void paintEvent(QPaintEvent *e) override;
 
 private slots:
+  // --- 这里是关键修正：QShared_ptr -> QSharedPointer ---
   void onFrame(const QSharedPointer<QImage> &frame);
   void onAudioData(const QByteArray &data);
   void onPositionChanged(qint64 pts);
   void updateOverlay();
-  void onSeekCompleted(); // 新增：seek完成槽函数
 
 private:
   QAudioOutput *audioOutput;
@@ -97,8 +95,6 @@ private:
   void drawSubtitlesAndLyrics(QPainter &p);
   void showOverlayBarForSeconds(int seconds);
   void scheduleUpdate(); // 控制帧率的更新调度
-  void savePlayPosition(); // 新增：保存播放位置
-  void loadPlayPosition(); // 新增：加载播放位置
 
   QFileSystemWatcher *screenStatusWatcher;
 
@@ -134,9 +130,4 @@ private:
   QTimer *toastTimer = nullptr;
   void drawToastMessage(QPainter &p);
   void showToastMessage(const QString &message, int durationMs = 1500);
-  
-  // 记忆播放相关
-  QSettings *playHistory = nullptr; // 新增：播放历史记录
-  QString currentFilePath; // 新增：当前播放的文件路径
-  bool resumeEnabled = true; // 新增：是否启用记忆播放
 };
