@@ -85,7 +85,8 @@ VideoPlayer::VideoPlayer(QWidget *parent)
   speedPressTimer->setSingleShot(true);
   connect(speedPressTimer, &QTimer::timeout, this, [this]() {
     if (pressed && !isSeeking) {
-      normalPlaybackSpeed = 1.0f; // 保存原始速度
+      // 修改：保存当前的速度，而不是写死1.0f
+      normalPlaybackSpeed = decoder->playbackSpeed(); 
       isSpeedPressed = true;
       decoder->setPlaybackSpeed(2.0f); // 设置 2 倍速
 
@@ -107,12 +108,14 @@ VideoPlayer::VideoPlayer(QWidget *parent)
   overlayBarTimer->setSingleShot(true);
   connect(overlayBarTimer, &QTimer::timeout, this, [this]() {
     showOverlayBar = false;
+    // 修改：当overlay隐藏时，同时隐藏按钮
+    trackButton->setVisible(false);
+    speedButton->setVisible(false);
     scheduleUpdate();
   });
   showOverlayBar = false;
 
-  trackButtonTimer = new QElapsedTimer();
-  trackButtonTimer->start();
+  // (原 trackButtonTimer 已被移除，改为直接控制)
 
   // 帧率控制定时器 - 60fps (约 16.67ms)
   frameRateTimer = new QTimer(this);
@@ -215,16 +218,6 @@ VideoPlayer::VideoPlayer(QWidget *parent)
         scheduleUpdate();
       });
     }
-    // QAction *muteAct = menu.addAction(tr("静音轨道"));
-    // muteAct->setCheckable(true);
-    // muteAct->setChecked(decoder->currentAudioTrack() == -1);
-    // audioGroup->addAction(muteAct);
-    // connect(muteAct, &QAction::triggered, this, [this]() {
-    //   decoder->setAudioTrack(-1);
-    //   errorMessage = tr("切换音轨: 静音轨道");
-    //   errorShowTimer->start(2000);
-    //   scheduleUpdate();
-    // });
     menu.addSeparator();
     QActionGroup *videoGroup = new QActionGroup(&menu);
     videoGroup->setExclusive(true);
@@ -253,6 +246,34 @@ VideoPlayer::VideoPlayer(QWidget *parent)
     });
     menu.exec(trackButton->mapToGlobal(QPoint(0, trackButton->height())));
   });
+
+  // --- 新增：倍速控制按钮初始化 ---
+  speedButton = new QPushButton("倍速", this);
+  // 初始位置将在 resizeEvent 中设置
+  speedButton->setStyleSheet(
+      "background:rgba(30,30,30,180);color:white;border-radius:8px;");
+  speedButton->raise();
+
+  // 初始化速度列表和当前索引
+  m_playbackSpeeds << 0.75f << 1.0f << 1.25f << 1.5f << 2.0f;
+  m_currentSpeedIndex = m_playbackSpeeds.indexOf(1.0f);
+  if (m_currentSpeedIndex < 0) m_currentSpeedIndex = 1; // 默认1.0x
+
+  connect(speedButton, &QPushButton::clicked, this, [this]() {
+      // 循环到下一个速度
+      m_currentSpeedIndex = (m_currentSpeedIndex + 1) % m_playbackSpeeds.size();
+      float newSpeed = m_playbackSpeeds[m_currentSpeedIndex];
+      decoder->setPlaybackSpeed(newSpeed);
+
+      // 使用土司消息显示当前速度
+      QString speedText = QString::number(newSpeed, 'f', 2) + "x";
+      showToastMessage(tr("播放速度: %1").arg(speedText), 2000);
+  });
+  // --- 倍速控制按钮初始化结束 ---
+
+  // 初始隐藏所有按钮
+  trackButton->setVisible(false);
+  speedButton->setVisible(false);
 }
 
 VideoPlayer::~VideoPlayer() {
@@ -281,10 +302,6 @@ VideoPlayer::~VideoPlayer() {
     ass_library_done(assLibrary);
     assLibrary = nullptr;
   }
-
-  // 关闭音频输出（使用 startDetached，避免不执行）
-  // QProcess::startDetached("ubus", QStringList() << "call" <<
-  // "eq_drc_process.output.rpc" << "control" << R"({"action":"Close"})");
 
   delete lyricRenderer;
   delete subtitleRenderer;
@@ -366,6 +383,9 @@ void VideoPlayer::play(const QString &path) {
   show();
   showOverlayBar = true;
   overlayBarTimer->start(5 * 1000);
+  // 修改：显示按钮
+  trackButton->setVisible(true);
+  speedButton->setVisible(true);
   scheduleUpdate();
   scrollTimer->start();
 }
@@ -429,7 +449,8 @@ void VideoPlayer::mouseReleaseEvent(QMouseEvent *) {
 
   // 如果是在 2 倍速状态，恢复正常速度
   if (isSpeedPressed) {
-    decoder->setPlaybackSpeed(1.0f);
+    // 修改：恢复到长按前的速度
+    decoder->setPlaybackSpeed(normalPlaybackSpeed);
     isSpeedPressed = false;
     toastMessage = "";
     toastTimer->start(200); // 显示 0.2 秒后消失
@@ -445,6 +466,9 @@ void VideoPlayer::mouseReleaseEvent(QMouseEvent *) {
     }
     showOverlayBar = true;
     overlayBarTimer->start(5 * 1000);
+    // 修改：显示按钮
+    trackButton->setVisible(true);
+    speedButton->setVisible(true);
     scheduleUpdate();
   } else {
     decoder->togglePause();
@@ -453,13 +477,15 @@ void VideoPlayer::mouseReleaseEvent(QMouseEvent *) {
       // 暂停时一直显示 overlay
       overlayBarTimer->stop();
       showOverlayBar = true;
-      scheduleUpdate();
     } else {
       // 播放时显示 5 秒 overlay
       showOverlayBar = true;
       overlayBarTimer->start(5 * 1000);
-      scheduleUpdate();
     }
+    // 修改：显示按钮
+    trackButton->setVisible(true);
+    speedButton->setVisible(true);
+    scheduleUpdate();
   }
 }
 
@@ -476,6 +502,9 @@ void VideoPlayer::mouseMoveEvent(QMouseEvent *e) {
 
   overlayBarTimer->stop();
   showOverlayBar = true;
+  // 修改：显示按钮
+  trackButton->setVisible(true);
+  speedButton->setVisible(true);
   scheduleUpdate();
 }
 
@@ -492,7 +521,8 @@ void VideoPlayer::seekByDelta(int dx) {
 }
 
 void VideoPlayer::resizeEvent(QResizeEvent *) {
-  // 移除 videoWidget 相关代码
+  // 新增：在窗口尺寸变化时，重新定位倍速按钮
+  speedButton->setGeometry(width() - 70, 40, 60, 28);
 }
 
 void VideoPlayer::paintEvent(QPaintEvent *) {
@@ -526,12 +556,10 @@ void VideoPlayer::paintEvent(QPaintEvent *) {
     p.setPen(QColor(220, 40, 40));
     p.drawText(boxRect, Qt::AlignCenter, msg);
   }
-  if (trackButtonTimer->elapsed() > 100) {
-    trackButton->setVisible(showOverlayBar);
-    trackButton->setEnabled(true);
-    trackButton->raise();
-    trackButtonTimer->restart();
-  }
+  
+  // (原 trackButtonTimer 逻辑已移除)
+  // 按钮的可见性现在由事件直接控制
+  
   if (showOverlayBar) {
     drawOverlayBar(p);
   }
@@ -664,6 +692,9 @@ void VideoPlayer::updateOverlay() {
 
 void VideoPlayer::showOverlayBarForSeconds(int seconds) {
   showOverlayBar = true;
+  // 修改：显示按钮
+  trackButton->setVisible(true);
+  speedButton->setVisible(true);
   overlayBarTimer->start(seconds * 1000);
 }
 void VideoPlayer::scheduleUpdate() {

@@ -33,7 +33,7 @@ protected:
   void paintEvent(QPaintEvent *e) override;
 
 private slots:
-  void onFrame(const QSharedPointer<QImage> &frame);
+  void onFrame(const QShared_ptr<QImage> &frame);
   void onAudioData(const QByteArray &data);
   void onPositionChanged(qint64 pts);
   void updateOverlay();
@@ -114,6 +114,11 @@ private:
   QElapsedTimer *trackButtonTimer;
   QMenu *audioMenu = nullptr;
   QMenu *videoMenu = nullptr;
+
+  // 新增：精细化倍速控制
+  QPushButton *speedButton = nullptr;
+  QVector<float> m_playbackSpeeds;
+  int m_currentSpeedIndex = 0;
 
   // 帧率控制
   qint64 lastScrollUpdateTime; // 上次滚动更新时间
